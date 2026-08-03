@@ -4552,30 +4552,16 @@ try:
                 maximum_rows=500
             )
 
+  --------------------------------------------------
     # --------------------------------------------------------
-    # FINAL EXCEL WORKBOOK
+    # FINAL EXCEL WORKBOOK — 9 SHEETS ONLY
     # --------------------------------------------------------
 
     final_output_sheets = {
         "Dashboard":
             dashboard_summary,
 
-        "Data Quality":
-            final_data_quality,
-
-        "Procurement Register":
-            purchase_register,
-
-        "Procurement Summary":
-            procurement_summary,
-
-        "Procurement Item Summary":
-            procurement_item_summary,
-
-        "Consumption Register":
-            consumption_register_with_pr,
-
-        "Subproject Summary":
+        "Subproject Cost Summary":
             subproject_consumption_summary,
 
         "Activity Summary":
@@ -4590,44 +4576,14 @@ try:
         "Inventory Summary":
             inventory_summary,
 
-        "Monthly Consumption":
-            monthly_consumption_summary,
+        "Consumption Register":
+            consumption_register_with_pr,
 
-        "PR Register":
-            pr_register,
+        "Procurement Register":
+            purchase_register,
 
-        "PR Reference Summary":
-            pr_reference_summary,
-
-        "PR Validation":
-            pr_validation_summary,
-
-        "PR Variance":
-            pr_variance,
-
-        "No PR Reference":
-            no_pr_reference,
-
-        "Procurement vs Consumption":
-            procurement_consumption_comparison,
-
-        "Stock Reconciliation":
-            stock_reconciliation,
-
-        "Final Audit":
-            final_audit_report,
-
-        "Purchase Review":
-            purchase_review,
-
-        "Stock Issue Review":
-            stock_issue_review,
-
-        "Inventory Review":
-            inventory_review,
-
-        "PR Source Review":
-            pr_review
+        "Audit Report":
+            final_audit_report
     }
 
     final_excel_output = create_excel_workbook(
@@ -4650,17 +4606,5 @@ try:
     )
 
     st.success(
-        "All modules completed successfully. "
-        "The final dashboard and Excel workbook are ready."
+        "Final report created successfully with only 9 Excel sheets."
     )
-
-except Exception as error:
-
-    st.error(
-        "Module 5 could not create the final dashboard "
-        "or Excel workbook."
-    )
-
-    st.exception(error)
-
-    st.stop()
