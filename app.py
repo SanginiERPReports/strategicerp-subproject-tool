@@ -4606,3 +4606,12 @@ try:
     st.success(
         "Final report created successfully with only 9 Excel sheets."
     )
+except Exception as error:
+
+    st.error(
+        "Module 5 could not create the final dashboard or Excel workbook."
+    )
+
+    st.exception(error)
+
+    st.stop()
