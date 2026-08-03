@@ -2041,10 +2041,8 @@ if grn_file and pr_file and stock_file:
             - total_consumed_principal
             - total_stock_principal
         )
-
         st.success(
-            "Actual subproject consumption "
-            "costing completed."
+            "Actual subproject consumption costing completed."
         )
 
         c1, c2, c3, c4 = st.columns(4)
@@ -2069,7 +2067,7 @@ if grn_file and pr_file and stock_file:
             f"{principal_difference:,.2f}"
         )
 
-             c5, c6, c7, c8 = st.columns(4)
+        c5, c6, c7, c8 = st.columns(4)
 
         c5.metric(
             "Receipt Records",
@@ -2098,7 +2096,6 @@ if grn_file and pr_file and stock_file:
         )
 
         st.subheader("Reconciliation")
-        st.subheader("Reconciliation")
 
         st.dataframe(
             reconciliation_df,
@@ -2117,7 +2114,6 @@ if grn_file and pr_file and stock_file:
         )
 
         if not project_subproject_summary.empty:
-
             st.subheader(
                 "Project and Subproject Summary"
             )
@@ -2128,9 +2124,7 @@ if grn_file and pr_file and stock_file:
                 hide_index=True
             )
 
-        st.subheader(
-            "Stock In Hand Preview"
-        )
+        st.subheader("Stock In Hand Preview")
 
         st.dataframe(
             stock_available_df.head(100),
@@ -2138,9 +2132,7 @@ if grn_file and pr_file and stock_file:
             hide_index=True
         )
 
-        st.subheader(
-            "Data Quality Summary"
-        )
+        st.subheader("Data Quality Summary")
 
         st.dataframe(
             data_quality_summary,
@@ -2165,17 +2157,13 @@ if grn_file and pr_file and stock_file:
         )
 
     except Exception as error:
-
         st.error(
-            "Something went wrong while "
-            "processing the files."
+            "Something went wrong while processing the files."
         )
 
         st.exception(error)
 
 else:
-
     st.info(
-        "Upload all three Excel files "
-        "to generate the report."
+        "Upload all three Excel files to generate the report."
     )
