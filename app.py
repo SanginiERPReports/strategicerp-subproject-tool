@@ -2069,7 +2069,7 @@ if grn_file and pr_file and stock_file:
             f"{principal_difference:,.2f}"
         )
 
-        c5, c6, c7, c8 = st.columns(4)
+             c5, c6, c7, c8 = st.columns(4)
 
         c5.metric(
             "Receipt Records",
@@ -2087,15 +2087,17 @@ if grn_file and pr_file and stock_file:
         )
 
         over_issue_count = int(
-    (
-        stock_in_hand_df["Over-Issue Qty"] > 0
-    ).sum()
-)
+            (
+                stock_in_hand_df["Over-Issue Qty"] > 0
+            ).sum()
+        )
 
-c8.metric(
-    "Over-Issue Records",
-    f"{over_issue_count:,}"
-)
+        c8.metric(
+            "Over-Issue Records",
+            f"{over_issue_count:,}"
+        )
+
+        st.subheader("Reconciliation")
         st.subheader("Reconciliation")
 
         st.dataframe(
