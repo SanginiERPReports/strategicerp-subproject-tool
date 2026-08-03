@@ -4,55 +4,52 @@ from io import BytesIO
 from datetime import datetime
 import re
 
+
 st.set_page_config(
-    page_title="StrategicERP Subproject Consumption Cost",
+    page_title="StrategicERP Subproject Consumption",
     layout="wide"
 )
 
+
 st.title("StrategicERP Subproject Consumption Cost")
-st.write(
-    "GRN/Purchase Bill provides actual receipt cost. "
-    "Stock Ledger issue quantity and issue subproject provide actual consumption. "
-    "PR is used only as a reference and validation source."
+
+st.caption(
+    "Actual consumption is taken directly from Stock Ledger Issued Amount "
+    "and mapped to the Sub Project entered in the Goods Issue Note."
 )
 
-grn_file = st.file_uploader(
-    "Upload GRN vs Purchase Bill Excel",
+
+purchase_file = st.file_uploader(
+    "1. Upload GRN vs Purchase Bill Excel",
     type=["xlsx"]
 )
 
-pr_file = st.file_uploader(
-    "Upload PR Excel",
-    type=["xlsx"]
-)
 
 stock_file = st.file_uploader(
-    "Upload Stock Ledger Excel",
+    "2. Upload Stock Ledger Excel",
     type=["xlsx"]
 )
 
-with st.expander("Cost assumptions", expanded=False):
-    bill_includes_gst = st.checkbox(
-        "Bill Item Amt includes GST",
-        value=True
-    )
 
-    include_freight = st.checkbox(
-        "Add Freight Chgs separately to material cost",
-        value=False
-    )
+pr_file = st.file_uploader(
+    "3. Upload PR Excel",
+    type=["xlsx"]
+)
 
 
 # ============================================================
-# HELPERS
+# HELPER FUNCTIONS
 # ============================================================
+
 
 def clean_text(value):
     if pd.isna(value):
         return ""
 
     value = str(value).upper().strip()
-    return re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+
+    return value
 
 
 def clean_item(value):
@@ -61,7 +58,9 @@ def clean_item(value):
 
     value = str(value).upper().strip()
     value = re.sub(r"[^A-Z0-9]+", " ", value)
-    return re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"\s+", " ", value)
+
+    return value.strip()
 
 
 def clean_subproject(value):
@@ -69,7 +68,10 @@ def clean_subproject(value):
         return ""
 
     value = str(value).upper().strip()
-    return re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r",+$", "", value)
+
+    return value.strip()
 
 
 def split_subprojects(value):
@@ -84,10 +86,10 @@ def split_subprojects(value):
     output = []
 
     for part in text.split(","):
-        part = clean_subproject(part)
+        cleaned = clean_subproject(part)
 
-        if part:
-            output.append(part)
+        if cleaned:
+            output.append(cleaned)
 
     return sorted(set(output))
 
@@ -105,35 +107,6 @@ def join_unique(values):
     return " | ".join(sorted(set(output)))
 
 
-def first_nonblank(values):
-    for value in values:
-        if pd.notna(value) and str(value).strip():
-            return value
-
-    return ""
-
-
-def find_column(df, candidates, required=True):
-    actual_columns = {
-        str(column).strip().upper(): column
-        for column in df.columns
-    }
-
-    for candidate in candidates:
-        candidate_key = str(candidate).strip().upper()
-
-        if candidate_key in actual_columns:
-            return actual_columns[candidate_key]
-
-    if required:
-        raise ValueError(
-            "Required column not found. Expected one of: "
-            + ", ".join(candidates)
-        )
-
-    return None
-
-
 def to_number(series):
     return pd.to_numeric(
         series,
@@ -141,23 +114,29 @@ def to_number(series):
     ).fillna(0)
 
 
-def safe_divide(numerator, denominator):
-    numerator = to_number(numerator)
-    denominator = to_number(denominator)
+def find_column(
+    dataframe,
+    candidates,
+    required=True
+):
+    column_map = {
+        str(column).strip().upper(): column
+        for column in dataframe.columns
+    }
 
-    result = pd.Series(
-        0.0,
-        index=numerator.index
-    )
+    for candidate in candidates:
+        key = str(candidate).strip().upper()
 
-    valid = denominator != 0
+        if key in column_map:
+            return column_map[key]
 
-    result.loc[valid] = (
-        numerator.loc[valid]
-        / denominator.loc[valid]
-    )
+    if required:
+        raise ValueError(
+            "Missing required column. Expected one of: "
+            + ", ".join(candidates)
+        )
 
-    return result
+    return None
 
 
 def create_excel(sheets):
@@ -187,10 +166,6 @@ def create_excel(sheets):
             "num_format": "#,##0.000"
         })
 
-        percentage_format = workbook.add_format({
-            "num_format": "0.00%"
-        })
-
         warning_format = workbook.add_format({
             "bg_color": "#FFF2CC",
             "font_color": "#7F6000"
@@ -202,16 +177,19 @@ def create_excel(sheets):
         })
 
         for sheet_name, dataframe in sheets.items():
-            sheet_name = sheet_name[:31]
+            if dataframe is None:
+                continue
+
+            safe_name = sheet_name[:31]
             export_df = dataframe.copy()
 
             export_df.to_excel(
                 writer,
-                sheet_name=sheet_name,
+                sheet_name=safe_name,
                 index=False
             )
 
-            worksheet = writer.sheets[sheet_name]
+            worksheet = writer.sheets[safe_name]
 
             worksheet.freeze_panes(1, 0)
 
@@ -240,27 +218,19 @@ def create_excel(sheets):
                         len(str(column_name)) + 4,
                         15
                     ),
-                    38
+                    40
                 )
 
-                if "%" in str(column_name):
-                    worksheet.set_column(
-                        column_number,
-                        column_number,
-                        15,
-                        percentage_format
-                    )
-
-                elif any(
+                if any(
                     word in lower_name
                     for word in [
                         "amount",
+                        "amt",
                         "cost",
                         "value",
                         "gst",
-                        "principal",
-                        "freight",
-                        "difference"
+                        "difference",
+                        "rate"
                     ]
                 ):
                     worksheet.set_column(
@@ -274,8 +244,7 @@ def create_excel(sheets):
                     word in lower_name
                     for word in [
                         "qty",
-                        "quantity",
-                        "rate"
+                        "quantity"
                     ]
                 ):
                     worksheet.set_column(
@@ -298,7 +267,7 @@ def create_excel(sheets):
                         for word in [
                             "status",
                             "validation",
-                            "quality"
+                            "review"
                         ]
                     )
                     and len(export_df) > 0
@@ -338,7 +307,8 @@ def create_excel(sheets):
 # MAIN PROCESS
 # ============================================================
 
-if grn_file and pr_file and stock_file:
+
+if purchase_file and stock_file and pr_file:
 
     try:
 
@@ -346,14 +316,9 @@ if grn_file and pr_file and stock_file:
         # READ FILES
         # ----------------------------------------------------
 
-        grn_df = pd.read_excel(
-            grn_file,
+        purchase_df = pd.read_excel(
+            purchase_file,
             header=1
-        )
-
-        pr_df = pd.read_excel(
-            pr_file,
-            header=0
         )
 
         stock_df = pd.read_excel(
@@ -361,11 +326,12 @@ if grn_file and pr_file and stock_file:
             header=0
         )
 
-        grn_df = grn_df.dropna(
-            how="all"
-        ).copy()
+        pr_df = pd.read_excel(
+            pr_file,
+            header=0
+        )
 
-        pr_df = pr_df.dropna(
+        purchase_df = purchase_df.dropna(
             how="all"
         ).copy()
 
@@ -373,14 +339,12 @@ if grn_file and pr_file and stock_file:
             how="all"
         ).copy()
 
-        grn_df.columns = (
-            grn_df.columns
-            .astype(str)
-            .str.strip()
-        )
+        pr_df = pr_df.dropna(
+            how="all"
+        ).copy()
 
-        pr_df.columns = (
-            pr_df.columns
+        purchase_df.columns = (
+            purchase_df.columns
             .astype(str)
             .str.strip()
         )
@@ -391,94 +355,35 @@ if grn_file and pr_file and stock_file:
             .str.strip()
         )
 
+        pr_df.columns = (
+            pr_df.columns
+            .astype(str)
+            .str.strip()
+        )
+
         # ----------------------------------------------------
-        # IDENTIFY GRN / PURCHASE BILL COLUMNS
+        # PURCHASE BILL COLUMNS
         # ----------------------------------------------------
 
-        grn_pr_col = find_column(
-            grn_df,
+        pb_company_col = find_column(
+            purchase_df,
             [
-                "PRNo",
-                "PR No",
-                "P.RNo",
-                "P.R. No"
-            ]
+                "Name Of Company",
+                "Name of Company"
+            ],
+            required=False
         )
 
-        grn_po_col = find_column(
-            grn_df,
-            [
-                "PO No",
-                "P.O. No",
-                "PONo"
-            ]
-        )
-
-        grn_no_col = find_column(
-            grn_df,
-            [
-                "GR No",
-                "GRN No",
-                "G.R. No"
-            ]
-        )
-
-        grn_item_col = find_column(
-            grn_df,
-            [
-                "Item Desc",
-                "Item Description"
-            ]
-        )
-
-        project_col = find_column(
-            grn_df,
+        pb_project_col = find_column(
+            purchase_df,
             [
                 "Project Name",
                 "Project"
             ]
         )
 
-        gst_col = find_column(
-            grn_df,
-            [
-                "GST Amt",
-                "GST Amount"
-            ]
-        )
-
-        bill_amount_col = find_column(
-            grn_df,
-            [
-                "Bill Item Amt",
-                "Bill Item Amount",
-                "Bill Amount"
-            ]
-        )
-
-        grn_qty_col = find_column(
-            grn_df,
-            [
-                "Received Qty",
-                "GRN Qty",
-                "GR Qty",
-                "Bill Qty",
-                "Quantity"
-            ]
-        )
-
-        freight_col = find_column(
-            grn_df,
-            [
-                "Freight Chgs",
-                "Freight Charges",
-                "Freight Amt"
-            ],
-            required=False
-        )
-
-        supplier_col = find_column(
-            grn_df,
+        pb_supplier_col = find_column(
+            purchase_df,
             [
                 "Supplier Name",
                 "Vendor Name",
@@ -487,8 +392,89 @@ if grn_file and pr_file and stock_file:
             required=False
         )
 
-        bill_no_col = find_column(
-            grn_df,
+        pb_pr_col = find_column(
+            purchase_df,
+            [
+                "PRNo",
+                "PR No",
+                "P.RNo"
+            ]
+        )
+
+        pb_po_col = find_column(
+            purchase_df,
+            [
+                "PO No",
+                "P.O. No",
+                "PONo"
+            ]
+        )
+
+        pb_grn_col = find_column(
+            purchase_df,
+            [
+                "GR No",
+                "G.R. No",
+                "GRN No"
+            ]
+        )
+
+        pb_item_col = find_column(
+            purchase_df,
+            [
+                "Item Desc",
+                "Item Description"
+            ]
+        )
+
+        pb_unit_col = find_column(
+            purchase_df,
+            [
+                "Unit",
+                "UOM"
+            ],
+            required=False
+        )
+
+        pb_received_qty_col = find_column(
+            purchase_df,
+            [
+                "Received Qty",
+                "GRN Qty",
+                "GR Qty",
+                "Quantity"
+            ]
+        )
+
+        pb_gst_col = find_column(
+            purchase_df,
+            [
+                "GST Amt",
+                "GST Amount"
+            ],
+            required=False
+        )
+
+        pb_bill_amount_col = find_column(
+            purchase_df,
+            [
+                "Bill Item Amt",
+                "Bill Item Amount",
+                "Bill Amount"
+            ]
+        )
+
+        pb_bill_rate_col = find_column(
+            purchase_df,
+            [
+                "Bill Rate",
+                "Rate"
+            ],
+            required=False
+        )
+
+        pb_bill_no_col = find_column(
+            purchase_df,
             [
                 "Bill No",
                 "Invoice No",
@@ -497,8 +483,145 @@ if grn_file and pr_file and stock_file:
             required=False
         )
 
-        unit_col = find_column(
-            grn_df,
+        # ----------------------------------------------------
+        # STOCK LEDGER COLUMNS
+        # ----------------------------------------------------
+
+        stock_date_col = find_column(
+            stock_df,
+            [
+                "Date",
+                "Transaction Date"
+            ],
+            required=False
+        )
+
+        stock_company_col = find_column(
+            stock_df,
+            [
+                "Name of Company",
+                "Name Of Company"
+            ],
+            required=False
+        )
+
+        stock_project_col = find_column(
+            stock_df,
+            [
+                "Project Name",
+                "Project"
+            ]
+        )
+
+        stock_subproject_col = find_column(
+            stock_df,
+            [
+                "Sub Project",
+                "SubProject",
+                "Sub-Project"
+            ]
+        )
+
+        stock_activity_col = find_column(
+            stock_df,
+            [
+                "Activity Code"
+            ],
+            required=False
+        )
+
+        stock_contractor_col = find_column(
+            stock_df,
+            [
+                "Contractor / Service Provider Name",
+                "Contractor Name"
+            ],
+            required=False
+        )
+
+        stock_godown_col = find_column(
+            stock_df,
+            [
+                "Godown Name",
+                "Store Name"
+            ],
+            required=False
+        )
+
+        stock_item_group_col = find_column(
+            stock_df,
+            [
+                "Item Group"
+            ],
+            required=False
+        )
+
+        stock_item_col = find_column(
+            stock_df,
+            [
+                "Item Desc",
+                "Item Description"
+            ]
+        )
+
+        stock_from_voucher_col = find_column(
+            stock_df,
+            [
+                "From Voucher"
+            ],
+            required=False
+        )
+
+        stock_voucher_col = find_column(
+            stock_df,
+            [
+                "Voucher No",
+                "GIN No",
+                "Issue Voucher No"
+            ],
+            required=False
+        )
+
+        stock_grn_col = find_column(
+            stock_df,
+            [
+                "G.R. No",
+                "GR No",
+                "GRN No"
+            ],
+            required=False
+        )
+
+        stock_po_col = find_column(
+            stock_df,
+            [
+                "P.O. No",
+                "PO No",
+                "PONo"
+            ],
+            required=False
+        )
+
+        stock_pr_col = find_column(
+            stock_df,
+            [
+                "P.RNo",
+                "PRNo",
+                "PR No"
+            ],
+            required=False
+        )
+
+        stock_grn_line_col = find_column(
+            stock_df,
+            [
+                "GRN Line ID"
+            ],
+            required=False
+        )
+
+        stock_unit_col = find_column(
+            stock_df,
             [
                 "Unit",
                 "UOM"
@@ -506,11 +629,54 @@ if grn_file and pr_file and stock_file:
             required=False
         )
 
+        stock_received_qty_col = find_column(
+            stock_df,
+            [
+                "Received Qty",
+                "Receipt Qty"
+            ],
+            required=False
+        )
+
+        stock_issued_qty_col = find_column(
+            stock_df,
+            [
+                "Issued Qty",
+                "Issue Qty",
+                "Consumed Qty"
+            ]
+        )
+
+        stock_received_amount_col = find_column(
+            stock_df,
+            [
+                "Received Amt",
+                "Received Amount"
+            ],
+            required=False
+        )
+
+        stock_issued_amount_col = find_column(
+            stock_df,
+            [
+                "Issued Amt",
+                "Issued Amount"
+            ]
+        )
+
+        stock_status_col = find_column(
+            stock_df,
+            [
+                "Status"
+            ],
+            required=False
+        )
+
         # ----------------------------------------------------
-        # IDENTIFY PR COLUMNS
+        # PR COLUMNS
         # ----------------------------------------------------
 
-        pr_no_col = find_column(
+        pr_number_col = find_column(
             pr_df,
             [
                 "Purchase Requisition (PR) No.",
@@ -528,7 +694,7 @@ if grn_file and pr_file and stock_file:
             ]
         )
 
-        pr_qty_col = find_column(
+        pr_quantity_col = find_column(
             pr_df,
             [
                 "Quantity",
@@ -547,260 +713,72 @@ if grn_file and pr_file and stock_file:
         )
 
         # ----------------------------------------------------
-        # IDENTIFY STOCK LEDGER COLUMNS
+        # PREPARE PURCHASE BILL DATA
         # ----------------------------------------------------
 
-        stock_pr_col = find_column(
-            stock_df,
-            [
-                "P.RNo",
-                "PRNo",
-                "PR No",
-                "P.R. No"
-            ]
-        )
-
-        stock_po_col = find_column(
-            stock_df,
-            [
-                "P.O. No",
-                "PO No",
-                "PONo"
-            ]
-        )
-
-        stock_grn_col = find_column(
-            stock_df,
-            [
-                "G.R. No",
-                "GR No",
-                "GRN No"
-            ]
-        )
-
-        stock_item_col = find_column(
-            stock_df,
-            [
-                "Item Desc",
-                "Item Description"
-            ]
-        )
-
-        stock_subproject_col = find_column(
-            stock_df,
-            [
-                "Sub Project",
-                "SubProject",
-                "Sub-Project"
-            ]
-        )
-
-        stock_issued_qty_col = find_column(
-            stock_df,
-            [
-                "Issued Qty",
-                "Issue Qty",
-                "Consumed Qty"
-            ]
-        )
-
-        stock_received_qty_col = find_column(
-            stock_df,
-            [
-                "Received Qty",
-                "Receipt Qty"
-            ],
-            required=False
-        )
-
-        # ----------------------------------------------------
-        # PREPARE GRN / PURCHASE BILL DATA
-        # ----------------------------------------------------
-
-        grn_df["Source PB Row No"] = range(
-            1,
-            len(grn_df) + 1
-        )
-
-        grn_df["PR_Clean"] = (
-            grn_df[grn_pr_col]
+        purchase_df["PR_Clean"] = (
+            purchase_df[pb_pr_col]
             .apply(clean_text)
         )
 
-        grn_df["PO_Clean"] = (
-            grn_df[grn_po_col]
+        purchase_df["PO_Clean"] = (
+            purchase_df[pb_po_col]
             .apply(clean_text)
         )
 
-        grn_df["GRN_Clean"] = (
-            grn_df[grn_no_col]
+        purchase_df["GRN_Clean"] = (
+            purchase_df[pb_grn_col]
             .apply(clean_text)
         )
 
-        grn_df["Item_Clean"] = (
-            grn_df[grn_item_col]
+        purchase_df["Item_Clean"] = (
+            purchase_df[pb_item_col]
             .apply(clean_item)
         )
 
-        grn_df["GRN Received Qty"] = to_number(
-            grn_df[grn_qty_col]
+        purchase_df["PB Received Qty"] = to_number(
+            purchase_df[pb_received_qty_col]
         )
 
-        grn_df["Bill Item Amount"] = to_number(
-            grn_df[bill_amount_col]
+        purchase_df["PB Bill Amount"] = to_number(
+            purchase_df[pb_bill_amount_col]
         )
 
-        grn_df["Receipt GST Amount"] = to_number(
-            grn_df[gst_col]
-        )
-
-        if freight_col:
-            grn_df["Freight Amount"] = to_number(
-                grn_df[freight_col]
+        if pb_gst_col:
+            purchase_df["PB GST Amount"] = to_number(
+                purchase_df[pb_gst_col]
             )
         else:
-            grn_df["Freight Amount"] = 0.0
+            purchase_df["PB GST Amount"] = 0.0
 
-        if bill_includes_gst:
-            grn_df["Base Principal Amount"] = (
-                grn_df["Bill Item Amount"]
-                - grn_df["Receipt GST Amount"]
-            )
-        else:
-            grn_df["Base Principal Amount"] = (
-                grn_df["Bill Item Amount"]
-            )
-
-        if include_freight:
-            grn_df["Receipt Principal Cost"] = (
-                grn_df["Base Principal Amount"]
-                + grn_df["Freight Amount"]
-            )
-        else:
-            grn_df["Receipt Principal Cost"] = (
-                grn_df["Base Principal Amount"]
-            )
-
-        grn_df["Receipt Total Including GST"] = (
-            grn_df["Receipt Principal Cost"]
-            + grn_df["Receipt GST Amount"]
+        purchase_df["PB Principal Amount"] = (
+            purchase_df["PB Bill Amount"]
+            - purchase_df["PB GST Amount"]
         )
 
-        grn_df["Receipt Key"] = (
-            grn_df["PR_Clean"]
-            + " || "
-            + grn_df["PO_Clean"]
-            + " || "
-            + grn_df["GRN_Clean"]
-            + " || "
-            + grn_df["Item_Clean"]
-        )
+        purchase_df["Purchase Data Status"] = "OK"
 
-        grn_df["PB Data Quality"] = "OK"
-
-        missing_key = (
-            (grn_df["PR_Clean"] == "")
-            | (grn_df["PO_Clean"] == "")
-            | (grn_df["GRN_Clean"] == "")
-            | (grn_df["Item_Clean"] == "")
-        )
-
-        grn_df.loc[
-            missing_key,
-            "PB Data Quality"
-        ] = (
-            "MANUAL REVIEW: "
-            "Missing PR/PO/GRN/Item"
-        )
-
-        grn_df.loc[
-            grn_df["GRN Received Qty"] <= 0,
-            "PB Data Quality"
-        ] = (
-            "MANUAL REVIEW: "
-            "Zero or missing received quantity"
-        )
-
-        # ----------------------------------------------------
-        # RECEIPT COST TABLE
-        # ----------------------------------------------------
-
-        receipt_aggregation = {
-            project_col: first_nonblank,
-            grn_pr_col: first_nonblank,
-            grn_po_col: first_nonblank,
-            grn_no_col: first_nonblank,
-            grn_item_col: first_nonblank,
-            "GRN Received Qty": "sum",
-            "Receipt Principal Cost": "sum",
-            "Receipt GST Amount": "sum",
-            "Receipt Total Including GST": "sum",
-            "Freight Amount": "sum",
-            "Source PB Row No": (
-                lambda x: join_unique(
-                    x.astype(str)
-                )
+        purchase_df.loc[
+            (
+                (purchase_df["PR_Clean"] == "")
+                | (purchase_df["PO_Clean"] == "")
+                | (purchase_df["GRN_Clean"] == "")
+                | (purchase_df["Item_Clean"] == "")
             ),
-            "PB Data Quality": join_unique
-        }
+            "Purchase Data Status"
+        ] = "REVIEW: Missing PR/PO/GRN/Item"
 
-        if supplier_col:
-            receipt_aggregation[
-                supplier_col
-            ] = join_unique
-
-        if bill_no_col:
-            receipt_aggregation[
-                bill_no_col
-            ] = join_unique
-
-        if unit_col:
-            receipt_aggregation[
-                unit_col
-            ] = first_nonblank
-
-        receipt_df = (
-            grn_df
-            .groupby(
-                [
-                    "Receipt Key",
-                    "PR_Clean",
-                    "PO_Clean",
-                    "GRN_Clean",
-                    "Item_Clean"
-                ],
-                as_index=False,
-                dropna=False
-            )
-            .agg(receipt_aggregation)
-        )
-
-        receipt_df["Principal Unit Cost"] = safe_divide(
-            receipt_df["Receipt Principal Cost"],
-            receipt_df["GRN Received Qty"]
-        )
-
-        receipt_df["GST Unit Cost"] = safe_divide(
-            receipt_df["Receipt GST Amount"],
-            receipt_df["GRN Received Qty"]
-        )
-
-        receipt_df[
-            "Total Unit Cost Including GST"
-        ] = safe_divide(
-            receipt_df[
-                "Receipt Total Including GST"
-            ],
-            receipt_df["GRN Received Qty"]
-        )
+        purchase_df.loc[
+            purchase_df["PB Received Qty"] <= 0,
+            "Purchase Data Status"
+        ] = "REVIEW: Zero or missing received quantity"
 
         # ----------------------------------------------------
         # PREPARE PR REFERENCE
-        # PR DOES NOT ALLOCATE CONSUMPTION COST
         # ----------------------------------------------------
 
         pr_df["PR_Clean"] = (
-            pr_df[pr_no_col]
+            pr_df[pr_number_col]
             .apply(clean_text)
         )
 
@@ -810,17 +788,17 @@ if grn_file and pr_file and stock_file:
         )
 
         pr_df["PR Quantity"] = to_number(
-            pr_df[pr_qty_col]
+            pr_df[pr_quantity_col]
         )
 
         pr_reference_rows = []
 
         for _, row in pr_df.iterrows():
 
-            if (
-                not row["PR_Clean"]
-                or not row["Item_Clean"]
-            ):
+            pr_number = row["PR_Clean"]
+            item = row["Item_Clean"]
+
+            if not pr_number or not item:
                 continue
 
             subprojects = split_subprojects(
@@ -829,27 +807,19 @@ if grn_file and pr_file and stock_file:
 
             if not subprojects:
                 pr_reference_rows.append({
-                    "PR_Clean":
-                        row["PR_Clean"],
-                    "Item_Clean":
-                        row["Item_Clean"],
-                    "Intended PR Subproject":
-                        "",
-                    "PR Quantity":
-                        row["PR Quantity"]
+                    "PR_Clean": pr_number,
+                    "Item_Clean": item,
+                    "Intended PR Subproject": "",
+                    "PR Quantity": row["PR Quantity"]
                 })
 
             else:
                 for subproject in subprojects:
                     pr_reference_rows.append({
-                        "PR_Clean":
-                            row["PR_Clean"],
-                        "Item_Clean":
-                            row["Item_Clean"],
-                        "Intended PR Subproject":
-                            subproject,
-                        "PR Quantity":
-                            row["PR Quantity"]
+                        "PR_Clean": pr_number,
+                        "Item_Clean": item,
+                        "Intended PR Subproject": subproject,
+                        "PR Quantity": row["PR Quantity"]
                     })
 
         pr_reference_detail = pd.DataFrame(
@@ -886,20 +856,156 @@ if grn_file and pr_file and stock_file:
                     dropna=False
                 )
                 .agg({
-                    "Intended PR Subproject":
-                        join_unique,
-                    "PR Quantity":
-                        "max"
+                    "Intended PR Subproject": join_unique,
+                    "PR Quantity": "max"
                 })
                 .rename(columns={
                     "Intended PR Subproject":
                         "Intended PR Subprojects",
+
                     "PR Quantity":
                         "PR Reference Quantity"
                 })
             )
 
-        receipt_df = receipt_df.merge(
+        # ----------------------------------------------------
+        # PREPARE STOCK LEDGER
+        # ----------------------------------------------------
+
+        if stock_pr_col:
+            stock_df["PR_Clean"] = (
+                stock_df[stock_pr_col]
+                .apply(clean_text)
+            )
+        else:
+            stock_df["PR_Clean"] = ""
+
+        if stock_po_col:
+            stock_df["PO_Clean"] = (
+                stock_df[stock_po_col]
+                .apply(clean_text)
+            )
+        else:
+            stock_df["PO_Clean"] = ""
+
+        if stock_grn_col:
+            stock_df["GRN_Clean"] = (
+                stock_df[stock_grn_col]
+                .apply(clean_text)
+            )
+        else:
+            stock_df["GRN_Clean"] = ""
+
+        stock_df["Item_Clean"] = (
+            stock_df[stock_item_col]
+            .apply(clean_item)
+        )
+
+        stock_df["Subproject_Clean"] = (
+            stock_df[stock_subproject_col]
+            .apply(clean_subproject)
+        )
+
+        stock_df["Issued Qty Numeric"] = to_number(
+            stock_df[stock_issued_qty_col]
+        )
+
+        stock_df["Issued Amount Numeric"] = to_number(
+            stock_df[stock_issued_amount_col]
+        )
+
+        if stock_received_qty_col:
+            stock_df["Received Qty Numeric"] = to_number(
+                stock_df[stock_received_qty_col]
+            )
+        else:
+            stock_df["Received Qty Numeric"] = 0.0
+
+        if stock_received_amount_col:
+            stock_df["Received Amount Numeric"] = to_number(
+                stock_df[stock_received_amount_col]
+            )
+        else:
+            stock_df["Received Amount Numeric"] = 0.0
+
+        stock_df["Stock Data Status"] = "OK"
+
+        stock_df.loc[
+            (
+                (stock_df["Issued Qty Numeric"] > 0)
+                & (stock_df["Subproject_Clean"] == "")
+            ),
+            "Stock Data Status"
+        ] = "REVIEW: Issued quantity has blank subproject"
+
+        stock_df.loc[
+            (
+                (stock_df["Issued Amount Numeric"] != 0)
+                & (stock_df["Issued Qty Numeric"] == 0)
+            ),
+            "Stock Data Status"
+        ] = (
+            "REVIEW: Issued amount exists "
+            "but issued quantity is zero"
+        )
+
+        stock_df.loc[
+            (
+                (stock_df["Issued Qty Numeric"] != 0)
+                & (stock_df["Issued Amount Numeric"] == 0)
+            ),
+            "Stock Data Status"
+        ] = (
+            "REVIEW: Issued quantity exists "
+            "but issued amount is zero"
+        )
+
+        # ----------------------------------------------------
+        # ACTUAL CONSUMPTION
+        # ----------------------------------------------------
+
+        issue_df = stock_df[
+            (
+                stock_df["Issued Qty Numeric"] != 0
+            )
+            | (
+                stock_df["Issued Amount Numeric"] != 0
+            )
+        ].copy()
+
+        issue_df["Actual Issue Subproject"] = (
+            issue_df["Subproject_Clean"]
+        )
+
+        issue_df["Actual Consumption Qty"] = (
+            issue_df["Issued Qty Numeric"]
+        )
+
+        issue_df["Actual Consumption Cost"] = (
+            issue_df["Issued Amount Numeric"]
+        )
+
+        issue_df["ERP Average Issue Rate"] = 0.0
+
+        nonzero_issue_quantity = (
+            issue_df["Actual Consumption Qty"] != 0
+        )
+
+        issue_df.loc[
+            nonzero_issue_quantity,
+            "ERP Average Issue Rate"
+        ] = (
+            issue_df.loc[
+                nonzero_issue_quantity,
+                "Actual Consumption Cost"
+            ]
+            / issue_df.loc[
+                nonzero_issue_quantity,
+                "Actual Consumption Qty"
+            ]
+        )
+
+        issue_df = issue_df.merge(
             pr_reference_summary,
             on=[
                 "PR_Clean",
@@ -908,1006 +1014,419 @@ if grn_file and pr_file and stock_file:
             how="left"
         )
 
-        receipt_df[
-            "Intended PR Subprojects"
-        ] = (
-            receipt_df[
-                "Intended PR Subprojects"
-            ]
+        issue_df["Intended PR Subprojects"] = (
+            issue_df["Intended PR Subprojects"]
             .fillna("")
         )
 
-        receipt_df[
-            "PR Reference Quantity"
-        ] = to_number(
-            receipt_df[
-                "PR Reference Quantity"
+        issue_df["PR Reference Quantity"] = to_number(
+            issue_df["PR Reference Quantity"]
+        )
+
+        def compare_pr_and_issue(row):
+            actual_subproject = str(
+                row["Actual Issue Subproject"]
+            ).strip()
+
+            intended_text = str(
+                row["Intended PR Subprojects"]
+            ).strip()
+
+            if not intended_text:
+                return "REVIEW: PR + Item reference not found"
+
+            intended_subprojects = [
+                part.strip()
+                for part in intended_text.split(" | ")
+                if part.strip()
             ]
-        )
 
-        receipt_df[
-            "PR Reference Status"
-        ] = "Reference available"
+            if actual_subproject in intended_subprojects:
+                return "Matched with PR reference"
 
-        receipt_df.loc[
-            receipt_df[
-                "Intended PR Subprojects"
-            ] == "",
-            "PR Reference Status"
-        ] = (
-            "MANUAL REVIEW: "
-            "PR + Item reference not found"
-        )
-
-        # ----------------------------------------------------
-        # PREPARE STOCK LEDGER
-        # ----------------------------------------------------
-
-        stock_df[
-            "Source Stock Row No"
-        ] = range(
-            1,
-            len(stock_df) + 1
-        )
-
-        stock_df["PR_Clean"] = (
-            stock_df[stock_pr_col]
-            .apply(clean_text)
-        )
-
-        stock_df["PO_Clean"] = (
-            stock_df[stock_po_col]
-            .apply(clean_text)
-        )
-
-        stock_df["GRN_Clean"] = (
-            stock_df[stock_grn_col]
-            .apply(clean_text)
-        )
-
-        stock_df["Item_Clean"] = (
-            stock_df[stock_item_col]
-            .apply(clean_item)
-        )
-
-        stock_df[
-            "Actual Issue Subproject"
-        ] = (
-            stock_df[stock_subproject_col]
-            .apply(clean_subproject)
-        )
-
-        stock_df[
-            "Actual Issued Qty"
-        ] = to_number(
-            stock_df[stock_issued_qty_col]
-        )
-
-        if stock_received_qty_col:
-            stock_df[
-                "Ledger Received Qty"
-            ] = to_number(
-                stock_df[
-                    stock_received_qty_col
-                ]
+            return (
+                "REVIEW: Issue subproject differs "
+                "from PR reference"
             )
+
+        if issue_df.empty:
+            issue_df["PR Validation"] = pd.Series(
+                dtype=str
+            )
+
         else:
-            stock_df[
-                "Ledger Received Qty"
-            ] = 0.0
+            issue_df["PR Validation"] = issue_df.apply(
+                compare_pr_and_issue,
+                axis=1
+            )
 
-        stock_df["Receipt Key"] = (
-            stock_df["PR_Clean"]
-            + " || "
-            + stock_df["PO_Clean"]
-            + " || "
-            + stock_df["GRN_Clean"]
-            + " || "
-            + stock_df["Item_Clean"]
+        # ----------------------------------------------------
+        # CONSUMPTION DETAIL
+        # ----------------------------------------------------
+
+        detail_columns = []
+
+        for column in [
+            stock_date_col,
+            stock_company_col,
+            stock_project_col,
+            stock_subproject_col,
+            stock_activity_col,
+            stock_contractor_col,
+            stock_godown_col,
+            stock_item_group_col,
+            stock_item_col,
+            stock_from_voucher_col,
+            stock_voucher_col,
+            stock_grn_col,
+            stock_po_col,
+            stock_pr_col,
+            stock_grn_line_col,
+            stock_unit_col,
+            stock_status_col
+        ]:
+            if column and column in issue_df.columns:
+                detail_columns.append(column)
+
+        detail_columns += [
+            "Actual Issue Subproject",
+            "Actual Consumption Qty",
+            "ERP Average Issue Rate",
+            "Actual Consumption Cost",
+            "Intended PR Subprojects",
+            "PR Reference Quantity",
+            "PR Validation",
+            "Stock Data Status"
+        ]
+
+        detail_columns = list(
+            dict.fromkeys(detail_columns)
         )
 
-        stock_df[
-            "Stock Data Quality"
-        ] = "OK"
-
-        stock_missing_key = (
-            (stock_df["PR_Clean"] == "")
-            | (stock_df["PO_Clean"] == "")
-            | (stock_df["GRN_Clean"] == "")
-            | (stock_df["Item_Clean"] == "")
-        )
-
-        stock_df.loc[
-            stock_missing_key,
-            "Stock Data Quality"
-        ] = (
-            "MANUAL REVIEW: "
-            "Missing PR/PO/GRN/Item"
-        )
-
-        stock_df.loc[
-            (
-                (
-                    stock_df[
-                        "Actual Issued Qty"
-                    ] > 0
-                )
-                & (
-                    stock_df[
-                        "Actual Issue Subproject"
-                    ] == ""
-                )
-            ),
-            "Stock Data Quality"
-        ] = (
-            "MANUAL REVIEW: "
-            "Issue subproject is blank"
-        )
-
-        issue_rows = stock_df[
-            stock_df[
-                "Actual Issued Qty"
-            ] != 0
+        consumption_detail = issue_df[
+            detail_columns
         ].copy()
 
         # ----------------------------------------------------
-        # ACTUAL ISSUE SUMMARY
+        # SUBPROJECT SUMMARY
         # ----------------------------------------------------
 
-        if issue_rows.empty:
+        subproject_summary = (
+            issue_df
+            .groupby(
+                [
+                    stock_project_col,
+                    "Actual Issue Subproject"
+                ],
+                as_index=False,
+                dropna=False
+            )[[
+                "Actual Consumption Qty",
+                "Actual Consumption Cost"
+            ]]
+            .sum()
+        )
 
-            issue_summary = pd.DataFrame(
-                columns=[
-                    "Receipt Key",
-                    "PR_Clean",
-                    "PO_Clean",
-                    "GRN_Clean",
-                    "Item_Clean",
-                    "Actual Issue Subproject",
-                    "Actual Issued Qty",
-                    "Source Stock Row Nos",
-                    "Stock Data Quality"
-                ]
-            )
+        if stock_voucher_col:
 
-        else:
-
-            issue_summary = (
-                issue_rows
+            issue_voucher_count = (
+                issue_df
                 .groupby(
                     [
-                        "Receipt Key",
-                        "PR_Clean",
-                        "PO_Clean",
-                        "GRN_Clean",
-                        "Item_Clean",
+                        stock_project_col,
                         "Actual Issue Subproject"
                     ],
                     as_index=False,
                     dropna=False
-                )
-                .agg({
-                    "Actual Issued Qty":
-                        "sum",
-                    "Source Stock Row No":
-                        lambda x: join_unique(
-                            x.astype(str)
-                        ),
-                    "Stock Data Quality":
-                        join_unique
-                })
+                )[stock_voucher_col]
+                .nunique()
                 .rename(columns={
-                    "Source Stock Row No":
-                        "Source Stock Row Nos"
+                    stock_voucher_col:
+                        "Issue Voucher Count"
                 })
             )
 
-        # Stock Ledger may repeat received quantity
-        # for every issue row. Therefore MAX is used.
+            subproject_summary = (
+                subproject_summary
+                .merge(
+                    issue_voucher_count,
+                    on=[
+                        stock_project_col,
+                        "Actual Issue Subproject"
+                    ],
+                    how="left"
+                )
+            )
 
-        ledger_validation = (
-            stock_df
+        else:
+            subproject_summary[
+                "Issue Voucher Count"
+            ] = 0
+
+        subproject_summary = (
+            subproject_summary
+            .sort_values(
+                "Actual Consumption Cost",
+                ascending=False
+            )
+        )
+
+        # ----------------------------------------------------
+        # ACTIVITY SUMMARY
+        # ----------------------------------------------------
+
+        if stock_activity_col:
+
+            activity_summary = (
+                issue_df
+                .groupby(
+                    [
+                        stock_project_col,
+                        "Actual Issue Subproject",
+                        stock_activity_col
+                    ],
+                    as_index=False,
+                    dropna=False
+                )[[
+                    "Actual Consumption Qty",
+                    "Actual Consumption Cost"
+                ]]
+                .sum()
+                .sort_values(
+                    "Actual Consumption Cost",
+                    ascending=False
+                )
+            )
+
+        else:
+            activity_summary = pd.DataFrame()
+
+        # ----------------------------------------------------
+        # CONTRACTOR SUMMARY
+        # ----------------------------------------------------
+
+        if stock_contractor_col:
+
+            contractor_summary = (
+                issue_df
+                .groupby(
+                    [
+                        stock_project_col,
+                        "Actual Issue Subproject",
+                        stock_contractor_col
+                    ],
+                    as_index=False,
+                    dropna=False
+                )[[
+                    "Actual Consumption Qty",
+                    "Actual Consumption Cost"
+                ]]
+                .sum()
+                .sort_values(
+                    "Actual Consumption Cost",
+                    ascending=False
+                )
+            )
+
+        else:
+            contractor_summary = pd.DataFrame()
+
+        # ----------------------------------------------------
+        # ITEM SUMMARY
+        # ----------------------------------------------------
+
+        item_summary = (
+            issue_df
             .groupby(
                 [
-                    "Receipt Key",
-                    "PR_Clean",
-                    "PO_Clean",
-                    "GRN_Clean",
-                    "Item_Clean"
+                    stock_project_col,
+                    "Actual Issue Subproject",
+                    stock_item_col
                 ],
+                as_index=False,
+                dropna=False
+            )[[
+                "Actual Consumption Qty",
+                "Actual Consumption Cost"
+            ]]
+            .sum()
+            .sort_values(
+                "Actual Consumption Cost",
+                ascending=False
+            )
+        )
+
+        # ----------------------------------------------------
+        # INVENTORY SUMMARY
+        # ----------------------------------------------------
+
+        inventory_group_columns = [
+            stock_project_col,
+            stock_item_col
+        ]
+
+        if stock_godown_col:
+            inventory_group_columns.insert(
+                1,
+                stock_godown_col
+            )
+
+        inventory_summary = (
+            stock_df
+            .groupby(
+                inventory_group_columns,
                 as_index=False,
                 dropna=False
             )
             .agg({
-                "Ledger Received Qty":
-                    "max",
-                "Source Stock Row No":
-                    "count"
-            })
-            .rename(columns={
-                "Source Stock Row No":
-                    "Stock Ledger Row Count"
+                "Received Qty Numeric": "sum",
+                "Issued Qty Numeric": "sum",
+                "Received Amount Numeric": "sum",
+                "Issued Amount Numeric": "sum"
             })
         )
 
-        # ----------------------------------------------------
-        # COST ACTUAL CONSUMPTION
-        # ----------------------------------------------------
-
-        consumption_df = issue_summary.merge(
-            receipt_df,
-            on=[
-                "Receipt Key",
-                "PR_Clean",
-                "PO_Clean",
-                "GRN_Clean",
-                "Item_Clean"
-            ],
-            how="left",
-            indicator=True
+        inventory_summary["Balance Qty"] = (
+            inventory_summary["Received Qty Numeric"]
+            - inventory_summary["Issued Qty Numeric"]
         )
 
-        consumption_df[
-            "Receipt Match Status"
-        ] = (
-            "Matched to GRN/Purchase Bill"
+        inventory_summary["Balance Value"] = (
+            inventory_summary["Received Amount Numeric"]
+            - inventory_summary["Issued Amount Numeric"]
         )
 
-        consumption_df.loc[
-            consumption_df["_merge"] != "both",
-            "Receipt Match Status"
-        ] = (
-            "MANUAL REVIEW: "
-            "Stock issue not matched "
-            "to GRN/Purchase Bill"
-        )
+        inventory_summary["Inventory Status"] = "OK"
 
-        consumption_df = (
-            consumption_df
-            .drop(columns=["_merge"])
-        )
+        inventory_summary.loc[
+            inventory_summary["Balance Qty"] < -0.001,
+            "Inventory Status"
+        ] = "REVIEW: Negative stock quantity"
 
-        for column in [
-            "GRN Received Qty",
-            "Receipt Principal Cost",
-            "Receipt GST Amount",
-            "Receipt Total Including GST",
-            "Principal Unit Cost",
-            "GST Unit Cost",
-            "Total Unit Cost Including GST",
-            "PR Reference Quantity"
-        ]:
-            if column in consumption_df.columns:
-                consumption_df[column] = to_number(
-                    consumption_df[column]
-                )
-
-        if not consumption_df.empty:
-
-            consumption_df[
-                "Total Actual Issued Qty for Receipt"
-            ] = (
-                consumption_df
-                .groupby(
-                    "Receipt Key"
-                )["Actual Issued Qty"]
-                .transform("sum")
-            )
-
-        else:
-
-            consumption_df[
-                "Total Actual Issued Qty for Receipt"
-            ] = pd.Series(dtype=float)
-
-        consumption_df[
-            "Costing Factor"
-        ] = 1.0
-
-        over_issue_mask = (
-            (
-                consumption_df[
-                    "Total Actual Issued Qty for Receipt"
-                ]
-                > consumption_df[
-                    "GRN Received Qty"
-                ]
-            )
-            & (
-                consumption_df[
-                    "Total Actual Issued Qty for Receipt"
-                ] > 0
-            )
-        )
-
-        consumption_df.loc[
-            over_issue_mask,
-            "Costing Factor"
-        ] = (
-            consumption_df.loc[
-                over_issue_mask,
-                "GRN Received Qty"
-            ]
-            / consumption_df.loc[
-                over_issue_mask,
-                "Total Actual Issued Qty for Receipt"
-            ]
-        )
-
-        consumption_df[
-            "Costed Issued Qty"
-        ] = (
-            consumption_df[
-                "Actual Issued Qty"
-            ]
-            * consumption_df[
-                "Costing Factor"
-            ]
-        )
-
-        consumption_df[
-            "Uncosted Over-Issue Qty"
-        ] = (
-            consumption_df[
-                "Actual Issued Qty"
-            ]
-            - consumption_df[
-                "Costed Issued Qty"
-            ]
-        )
-
-        consumption_df[
-            "Consumed Principal Cost"
-        ] = (
-            consumption_df[
-                "Costed Issued Qty"
-            ]
-            * consumption_df[
-                "Principal Unit Cost"
-            ]
-        )
-
-        consumption_df[
-            "Consumed GST Value"
-        ] = (
-            consumption_df[
-                "Costed Issued Qty"
-            ]
-            * consumption_df[
-                "GST Unit Cost"
-            ]
-        )
-
-        consumption_df[
-            "Consumed Total Including GST"
-        ] = (
-            consumption_df[
-                "Costed Issued Qty"
-            ]
-            * consumption_df[
-                "Total Unit Cost Including GST"
-            ]
-        )
-
-        consumption_df[
-            "Consumption Status"
-        ] = "Actual issue costed"
-
-        consumption_df.loc[
-            (
-                consumption_df[
-                    "Actual Issue Subproject"
-                ]
-                .fillna("")
-                == ""
-            ),
-            "Consumption Status"
-        ] = (
-            "MANUAL REVIEW: "
-            "Blank actual issue subproject"
-        )
-
-        consumption_df.loc[
-            consumption_df[
-                "Receipt Match Status"
-            ]
-            .str.contains(
-                "MANUAL REVIEW",
-                na=False
-            ),
-            "Consumption Status"
-        ] = (
-            "MANUAL REVIEW: "
-            "Receipt cost unavailable"
-        )
-
-        consumption_df.loc[
-            consumption_df[
-                "Uncosted Over-Issue Qty"
-            ] > 0,
-            "Consumption Status"
-        ] = (
-            "MANUAL REVIEW: "
-            "Issue exceeds receipt; "
-            "value proportionately capped"
-        )
-
-        def validate_pr_subproject(row):
-            actual = str(
-                row.get(
-                    "Actual Issue Subproject",
-                    ""
-                )
-            ).strip()
-
-            intended_text = str(
-                row.get(
-                    "Intended PR Subprojects",
-                    ""
-                )
-            ).strip()
-
-            if not intended_text:
-                return (
-                    "REVIEW: "
-                    "PR reference unavailable"
-                )
-
-            intended = [
-                item.strip()
-                for item in intended_text.split(" | ")
-                if item.strip()
-            ]
-
-            if actual in intended:
-                return (
-                    "Actual issue agrees "
-                    "with PR reference"
-                )
-
-            return (
-                "REVIEW: Actual issue "
-                "subproject differs "
-                "from PR reference"
-            )
-
-        if not consumption_df.empty:
-
-            consumption_df[
-                "PR vs Actual Issue Validation"
-            ] = consumption_df.apply(
-                validate_pr_subproject,
-                axis=1
-            )
-
-        else:
-
-            consumption_df[
-                "PR vs Actual Issue Validation"
-            ] = pd.Series(dtype=str)
+        inventory_summary.loc[
+            inventory_summary["Balance Value"] < -0.01,
+            "Inventory Status"
+        ] = "REVIEW: Negative stock value"
 
         # ----------------------------------------------------
-        # STOCK IN HAND BY RECEIPT
+        # PROCUREMENT SUMMARY
         # ----------------------------------------------------
 
-        if issue_rows.empty:
+        procurement_group_columns = [
+            pb_project_col
+        ]
 
-            issued_by_receipt = pd.DataFrame(
-                columns=[
-                    "Receipt Key",
-                    "PR_Clean",
-                    "PO_Clean",
-                    "GRN_Clean",
-                    "Item_Clean",
-                    "Total Actual Issued Qty"
-                ]
+        if pb_supplier_col:
+            procurement_group_columns.append(
+                pb_supplier_col
             )
 
-        else:
-
-            issued_by_receipt = (
-                issue_rows
-                .groupby(
-                    [
-                        "Receipt Key",
-                        "PR_Clean",
-                        "PO_Clean",
-                        "GRN_Clean",
-                        "Item_Clean"
-                    ],
-                    as_index=False,
-                    dropna=False
-                )["Actual Issued Qty"]
-                .sum()
-                .rename(columns={
-                    "Actual Issued Qty":
-                        "Total Actual Issued Qty"
-                })
+        procurement_summary = (
+            purchase_df
+            .groupby(
+                procurement_group_columns,
+                as_index=False,
+                dropna=False
             )
-
-        stock_in_hand_df = receipt_df.merge(
-            issued_by_receipt,
-            on=[
-                "Receipt Key",
-                "PR_Clean",
-                "PO_Clean",
-                "GRN_Clean",
-                "Item_Clean"
-            ],
-            how="left"
-        )
-
-        stock_in_hand_df[
-            "Total Actual Issued Qty"
-        ] = to_number(
-            stock_in_hand_df[
-                "Total Actual Issued Qty"
-            ]
-        )
-
-        stock_in_hand_df = (
-            stock_in_hand_df
-            .merge(
-                ledger_validation,
-                on=[
-                    "Receipt Key",
-                    "PR_Clean",
-                    "PO_Clean",
-                    "GRN_Clean",
-                    "Item_Clean"
-                ],
-                how="left"
+            .agg({
+                "PB Received Qty": "sum",
+                "PB Principal Amount": "sum",
+                "PB GST Amount": "sum",
+                "PB Bill Amount": "sum"
+            })
+            .sort_values(
+                "PB Principal Amount",
+                ascending=False
             )
         )
-
-        stock_in_hand_df[
-            "Ledger Received Qty"
-        ] = to_number(
-            stock_in_hand_df[
-                "Ledger Received Qty"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Stock Ledger Row Count"
-        ] = to_number(
-            stock_in_hand_df[
-                "Stock Ledger Row Count"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Costed Issued Qty"
-        ] = (
-            stock_in_hand_df[
-                [
-                    "GRN Received Qty",
-                    "Total Actual Issued Qty"
-                ]
-            ]
-            .min(axis=1)
-            .clip(lower=0)
-        )
-
-        stock_in_hand_df[
-            "Stock In Hand Qty"
-        ] = (
-            stock_in_hand_df[
-                "GRN Received Qty"
-            ]
-            - stock_in_hand_df[
-                "Costed Issued Qty"
-            ]
-        ).clip(lower=0)
-
-        stock_in_hand_df[
-            "Over-Issue Qty"
-        ] = (
-            stock_in_hand_df[
-                "Total Actual Issued Qty"
-            ]
-            - stock_in_hand_df[
-                "GRN Received Qty"
-            ]
-        ).clip(lower=0)
-
-        stock_in_hand_df[
-            "Consumed Principal Cost"
-        ] = (
-            stock_in_hand_df[
-                "Costed Issued Qty"
-            ]
-            * stock_in_hand_df[
-                "Principal Unit Cost"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Consumed GST Value"
-        ] = (
-            stock_in_hand_df[
-                "Costed Issued Qty"
-            ]
-            * stock_in_hand_df[
-                "GST Unit Cost"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Consumed Total Including GST"
-        ] = (
-            stock_in_hand_df[
-                "Costed Issued Qty"
-            ]
-            * stock_in_hand_df[
-                "Total Unit Cost Including GST"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Stock In Hand Principal Cost"
-        ] = (
-            stock_in_hand_df[
-                "Stock In Hand Qty"
-            ]
-            * stock_in_hand_df[
-                "Principal Unit Cost"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Stock In Hand GST Value"
-        ] = (
-            stock_in_hand_df[
-                "Stock In Hand Qty"
-            ]
-            * stock_in_hand_df[
-                "GST Unit Cost"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Stock In Hand Total Including GST"
-        ] = (
-            stock_in_hand_df[
-                "Stock In Hand Qty"
-            ]
-            * stock_in_hand_df[
-                "Total Unit Cost Including GST"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Quantity Validation"
-        ] = "OK"
-
-        stock_in_hand_df.loc[
-            stock_in_hand_df[
-                "Over-Issue Qty"
-            ] > 0,
-            "Quantity Validation"
-        ] = (
-            "MANUAL REVIEW: "
-            "Issued quantity exceeds "
-            "GRN received quantity"
-        )
-
-        ledger_qty_available = (
-            stock_in_hand_df[
-                "Ledger Received Qty"
-            ] > 0
-        )
-
-        quantity_difference = (
-            stock_in_hand_df[
-                "Ledger Received Qty"
-            ]
-            - stock_in_hand_df[
-                "GRN Received Qty"
-            ]
-        ).abs()
-
-        quantity_tolerance = (
-            stock_in_hand_df[
-                "GRN Received Qty"
-            ]
-            .abs()
-            * 0.001
-        ).clip(lower=0.001)
-
-        stock_in_hand_df.loc[
-            (
-                ledger_qty_available
-                & (
-                    quantity_difference
-                    > quantity_tolerance
-                )
-            ),
-            "Quantity Validation"
-        ] = (
-            "REVIEW: Stock Ledger "
-            "received quantity differs "
-            "from GRN quantity"
-        )
-
-        stock_in_hand_df[
-            "Cost Reconciliation Difference"
-        ] = (
-            stock_in_hand_df[
-                "Receipt Principal Cost"
-            ]
-            - stock_in_hand_df[
-                "Consumed Principal Cost"
-            ]
-            - stock_in_hand_df[
-                "Stock In Hand Principal Cost"
-            ]
-        )
-
-        stock_in_hand_df[
-            "Cost Reconciliation Status"
-        ] = "Reconciled"
-
-        stock_in_hand_df.loc[
-            stock_in_hand_df[
-                "Cost Reconciliation Difference"
-            ].abs() > 0.01,
-            "Cost Reconciliation Status"
-        ] = (
-            "ERROR: Receipt cost "
-            "does not reconcile"
-        )
-
-        # ----------------------------------------------------
-        # SUMMARIES
-        # ----------------------------------------------------
-
-        valid_consumption = consumption_df[
-            consumption_df[
-                "Actual Issue Subproject"
-            ]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            != ""
-        ].copy()
-
-        if valid_consumption.empty:
-
-            subproject_summary = pd.DataFrame(
-                columns=[
-                    "Actual Issue Subproject",
-                    "Actual Issued Qty",
-                    "Costed Issued Qty",
-                    "Uncosted Over-Issue Qty",
-                    "Consumed Principal Cost",
-                    "Consumed GST Value",
-                    "Consumed Total Including GST"
-                ]
-            )
-
-        else:
-
-            subproject_summary = (
-                valid_consumption
-                .groupby(
-                    "Actual Issue Subproject",
-                    as_index=False,
-                    dropna=False
-                )[[
-                    "Actual Issued Qty",
-                    "Costed Issued Qty",
-                    "Uncosted Over-Issue Qty",
-                    "Consumed Principal Cost",
-                    "Consumed GST Value",
-                    "Consumed Total Including GST"
-                ]]
-                .sum()
-                .sort_values(
-                    "Consumed Principal Cost",
-                    ascending=False
-                )
-            )
-
-        if valid_consumption.empty:
-
-            project_subproject_summary = (
-                pd.DataFrame()
-            )
-
-        else:
-
-            project_subproject_summary = (
-                valid_consumption
-                .groupby(
-                    [
-                        project_col,
-                        "Actual Issue Subproject"
-                    ],
-                    as_index=False,
-                    dropna=False
-                )[[
-                    "Actual Issued Qty",
-                    "Costed Issued Qty",
-                    "Consumed Principal Cost",
-                    "Consumed GST Value",
-                    "Consumed Total Including GST"
-                ]]
-                .sum()
-                .sort_values(
-                    "Consumed Principal Cost",
-                    ascending=False
-                )
-            )
-
-        stock_available_df = stock_in_hand_df[
-            stock_in_hand_df[
-                "Stock In Hand Qty"
-            ] > 0
-        ].copy()
 
         # ----------------------------------------------------
         # RECONCILIATION
         # ----------------------------------------------------
 
-        total_receipt_principal = (
-            receipt_df[
-                "Receipt Principal Cost"
-            ].sum()
+        total_purchase_bill_amount = (
+            purchase_df["PB Bill Amount"].sum()
         )
 
-        total_receipt_gst = (
-            receipt_df[
-                "Receipt GST Amount"
-            ].sum()
+        total_purchase_principal_amount = (
+            purchase_df["PB Principal Amount"].sum()
         )
 
-        total_receipt_total = (
-            receipt_df[
-                "Receipt Total Including GST"
-            ].sum()
+        total_stock_received_amount = (
+            stock_df["Received Amount Numeric"].sum()
         )
 
-        total_consumed_principal = (
-            stock_in_hand_df[
-                "Consumed Principal Cost"
-            ].sum()
+        total_stock_issued_amount = (
+            stock_df["Issued Amount Numeric"].sum()
         )
 
-        total_consumed_gst = (
-            stock_in_hand_df[
-                "Consumed GST Value"
-            ].sum()
+        total_stock_balance_value = (
+            inventory_summary["Balance Value"].sum()
         )
 
-        total_consumed_total = (
-            stock_in_hand_df[
-                "Consumed Total Including GST"
-            ].sum()
-        )
-
-        total_stock_principal = (
-            stock_in_hand_df[
-                "Stock In Hand Principal Cost"
-            ].sum()
-        )
-
-        total_stock_gst = (
-            stock_in_hand_df[
-                "Stock In Hand GST Value"
-            ].sum()
-        )
-
-        total_stock_total = (
-            stock_in_hand_df[
-                "Stock In Hand Total Including GST"
-            ].sum()
-        )
-
-        reconciliation_df = pd.DataFrame([
+        reconciliation = pd.DataFrame([
             {
-                "Measure":
-                    "Principal / Material Cost",
-                "Receipt Value":
-                    total_receipt_principal,
-                "Consumed Value":
-                    total_consumed_principal,
-                "Stock In Hand Value":
-                    total_stock_principal,
-                "Reconciliation Difference":
-                    total_receipt_principal
-                    - total_consumed_principal
-                    - total_stock_principal
+                "Check":
+                    "Purchase Bill total vs "
+                    "Stock Ledger received amount",
+
+                "Purchase Bill Value":
+                    total_purchase_bill_amount,
+
+                "Stock Ledger Value":
+                    total_stock_received_amount,
+
+                "Difference":
+                    total_purchase_bill_amount
+                    - total_stock_received_amount,
+
+                "Comment":
+                    "Difference may include GST, opening stock, "
+                    "timing, returns, adjustments, or valuation basis."
             },
             {
-                "Measure":
-                    "GST Value",
-                "Receipt Value":
-                    total_receipt_gst,
-                "Consumed Value":
-                    total_consumed_gst,
-                "Stock In Hand Value":
-                    total_stock_gst,
-                "Reconciliation Difference":
-                    total_receipt_gst
-                    - total_consumed_gst
-                    - total_stock_gst
-            },
-            {
-                "Measure":
-                    "Total Including GST",
-                "Receipt Value":
-                    total_receipt_total,
-                "Consumed Value":
-                    total_consumed_total,
-                "Stock In Hand Value":
-                    total_stock_total,
-                "Reconciliation Difference":
-                    total_receipt_total
-                    - total_consumed_total
-                    - total_stock_total
+                "Check":
+                    "Stock Ledger movement reconciliation",
+
+                "Purchase Bill Value":
+                    total_stock_received_amount,
+
+                "Stock Ledger Value":
+                    total_stock_issued_amount
+                    + total_stock_balance_value,
+
+                "Difference":
+                    total_stock_received_amount
+                    - total_stock_issued_amount
+                    - total_stock_balance_value,
+
+                "Comment":
+                    "Received Amount should equal Issued Amount "
+                    "plus Balance Value."
             }
         ])
 
-        reconciliation_df["Status"] = (
-            reconciliation_df[
-                "Reconciliation Difference"
-            ]
+        reconciliation["Status"] = (
+            reconciliation["Difference"]
             .abs()
             .apply(
                 lambda value:
                     "Reconciled"
                     if value <= 0.01
-                    else "ERROR: Not reconciled"
+                    else "REVIEW REQUIRED"
             )
         )
 
         # ----------------------------------------------------
-        # REVIEW TABLES
+        # REVIEW REPORTS
         # ----------------------------------------------------
 
-        pb_review = grn_df[
-            grn_df[
-                "PB Data Quality"
-            ] != "OK"
-        ].copy()
-
-        receipt_review = stock_in_hand_df[
+        issue_review = issue_df[
             (
-                stock_in_hand_df[
-                    "Quantity Validation"
-                ] != "OK"
+                issue_df["Stock Data Status"] != "OK"
             )
             | (
-                stock_in_hand_df[
-                    "Cost Reconciliation Status"
-                ] != "Reconciled"
-            )
-            | (
-                stock_in_hand_df[
-                    "PR Reference Status"
-                ]
-                .str.contains(
-                    "MANUAL REVIEW",
-                    na=False
-                )
-            )
-        ].copy()
-
-        consumption_review = consumption_df[
-            (
-                consumption_df[
-                    "Consumption Status"
-                ]
-                .str.contains(
-                    "MANUAL REVIEW",
-                    na=False
-                )
-            )
-            | (
-                consumption_df[
-                    "PR vs Actual Issue Validation"
-                ]
+                issue_df["PR Validation"]
                 .str.contains(
                     "REVIEW",
                     na=False
@@ -1915,196 +1434,125 @@ if grn_file and pr_file and stock_file:
             )
         ].copy()
 
-        unmatched_stock_issues = consumption_df[
-            consumption_df[
-                "Receipt Match Status"
-            ]
-            .str.contains(
-                "MANUAL REVIEW",
-                na=False
-            )
+        purchase_review = purchase_df[
+            purchase_df[
+                "Purchase Data Status"
+            ] != "OK"
         ].copy()
 
-        data_quality_summary = pd.DataFrame([
+        inventory_review = inventory_summary[
+            inventory_summary[
+                "Inventory Status"
+            ] != "OK"
+        ].copy()
+
+        data_quality = pd.DataFrame([
             {
                 "Check":
-                    "Purchase Bill source rows",
+                    "Stock Ledger issue rows",
+
                 "Total Rows":
-                    len(grn_df),
+                    len(issue_df),
+
                 "Review Rows":
-                    len(pb_review)
+                    len(issue_review),
+
+                "Status":
+                    "OK"
+                    if len(issue_review) == 0
+                    else "REVIEW REQUIRED"
             },
             {
                 "Check":
-                    "Receipt cost records",
+                    "Purchase Bill rows",
+
                 "Total Rows":
-                    len(receipt_df),
+                    len(purchase_df),
+
                 "Review Rows":
-                    len(receipt_review)
+                    len(purchase_review),
+
+                "Status":
+                    "OK"
+                    if len(purchase_review) == 0
+                    else "REVIEW REQUIRED"
             },
             {
                 "Check":
-                    "Consumption records",
+                    "Inventory summary rows",
+
                 "Total Rows":
-                    len(consumption_df),
+                    len(inventory_summary),
+
                 "Review Rows":
-                    len(consumption_review)
-            },
-            {
-                "Check":
-                    "Unmatched stock issues",
-                "Total Rows":
-                    len(consumption_df),
-                "Review Rows":
-                    len(unmatched_stock_issues)
-            },
-            {
-                "Check":
-                    "Over-issued receipts",
-                "Total Rows":
-                    len(stock_in_hand_df),
-                "Review Rows":
-                    int(
-                        (
-                            stock_in_hand_df[
-                                "Over-Issue Qty"
-                            ] > 0
-                        ).sum()
-                    )
+                    len(inventory_review),
+
+                "Status":
+                    "OK"
+                    if len(inventory_review) == 0
+                    else "REVIEW REQUIRED"
             }
         ])
-
-        data_quality_summary["Status"] = (
-            data_quality_summary[
-                "Review Rows"
-            ]
-            .apply(
-                lambda count:
-                    "OK"
-                    if count == 0
-                    else "REVIEW REQUIRED"
-            )
-        )
-
-        # ----------------------------------------------------
-        # EXCEL OUTPUT
-        # ----------------------------------------------------
-
-        output_sheets = {
-            "Reconciliation":
-                reconciliation_df,
-
-            "Subproject Consumption":
-                subproject_summary,
-
-            "Project Subproject":
-                project_subproject_summary,
-
-            "Consumption Detail":
-                consumption_df,
-
-            "Stock In Hand":
-                stock_available_df,
-
-            "Receipt Cost Detail":
-                receipt_df,
-
-            "PR Reference":
-                pr_reference_summary,
-
-            "Data Quality":
-                data_quality_summary,
-
-            "Consumption Review":
-                consumption_review,
-
-            "Receipt Review":
-                receipt_review,
-
-            "Unmatched Stock Issues":
-                unmatched_stock_issues,
-
-            "PB Source Review":
-                pb_review
-        }
-
-        excel_output = create_excel(
-            output_sheets
-        )
 
         # ----------------------------------------------------
         # DISPLAY RESULTS
         # ----------------------------------------------------
 
-        principal_difference = (
-            total_receipt_principal
-            - total_consumed_principal
-            - total_stock_principal
+        total_consumption_cost = (
+            issue_df[
+                "Actual Consumption Cost"
+            ].sum()
         )
+
+        total_received_value = (
+            stock_df[
+                "Received Amount Numeric"
+            ].sum()
+        )
+
+        total_closing_stock_value = (
+            inventory_summary[
+                "Balance Value"
+            ].sum()
+        )
+
+        blank_subproject_count = int(
+            (
+                issue_df[
+                    "Actual Issue Subproject"
+                ] == ""
+            ).sum()
+        )
+
         st.success(
-            "Actual subproject consumption costing completed."
+            "Actual subproject consumption report "
+            "generated successfully."
         )
 
         c1, c2, c3, c4 = st.columns(4)
 
         c1.metric(
-            "Receipt Principal Cost",
-            f"{total_receipt_principal:,.2f}"
+            "Actual Consumption Cost",
+            f"{total_consumption_cost:,.2f}"
         )
 
         c2.metric(
-            "Consumed Principal Cost",
-            f"{total_consumed_principal:,.2f}"
+            "Stock Ledger Received Value",
+            f"{total_received_value:,.2f}"
         )
 
         c3.metric(
-            "Stock In Hand Principal Cost",
-            f"{total_stock_principal:,.2f}"
+            "Closing Stock Value",
+            f"{total_closing_stock_value:,.2f}"
         )
 
         c4.metric(
-            "Reconciliation Difference",
-            f"{principal_difference:,.2f}"
-        )
-
-        c5, c6, c7, c8 = st.columns(4)
-
-        c5.metric(
-            "Receipt Records",
-            f"{len(receipt_df):,}"
-        )
-
-        c6.metric(
-            "Consumption Records",
-            f"{len(consumption_df):,}"
-        )
-
-        c7.metric(
-            "Review Rows",
-            f"{len(consumption_review):,}"
-        )
-
-        over_issue_count = int(
-            (
-                stock_in_hand_df["Over-Issue Qty"] > 0
-            ).sum()
-        )
-
-        c8.metric(
-            "Over-Issue Records",
-            f"{over_issue_count:,}"
-        )
-
-        st.subheader("Reconciliation")
-
-        st.dataframe(
-            reconciliation_df,
-            use_container_width=True,
-            hide_index=True
+            "Blank Issue Subprojects",
+            f"{blank_subproject_count:,}"
         )
 
         st.subheader(
-            "Actual Subproject Consumption Summary"
+            "Subproject Consumption Summary"
         )
 
         st.dataframe(
@@ -2113,57 +1561,115 @@ if grn_file and pr_file and stock_file:
             hide_index=True
         )
 
-        if not project_subproject_summary.empty:
-            st.subheader(
-                "Project and Subproject Summary"
-            )
-
-            st.dataframe(
-                project_subproject_summary,
-                use_container_width=True,
-                hide_index=True
-            )
-
-        st.subheader("Stock In Hand Preview")
+        st.subheader(
+            "Inventory Summary"
+        )
 
         st.dataframe(
-            stock_available_df.head(100),
+            inventory_summary,
             use_container_width=True,
             hide_index=True
         )
 
-        st.subheader("Data Quality Summary")
+        st.subheader(
+            "Reconciliation"
+        )
 
         st.dataframe(
-            data_quality_summary,
+            reconciliation,
             use_container_width=True,
             hide_index=True
         )
 
-        output_filename = (
-            "StrategicERP_Actual_"
-            "Subproject_Consumption_"
+        st.subheader(
+            "Data Quality"
+        )
+
+        st.dataframe(
+            data_quality,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # ----------------------------------------------------
+        # EXCEL OUTPUT
+        # ----------------------------------------------------
+
+        output_sheets = {
+            "Subproject Consumption":
+                subproject_summary,
+
+            "Activity Summary":
+                activity_summary,
+
+            "Contractor Summary":
+                contractor_summary,
+
+            "Item Summary":
+                item_summary,
+
+            "Consumption Detail":
+                consumption_detail,
+
+            "Inventory Summary":
+                inventory_summary,
+
+            "Procurement Summary":
+                procurement_summary,
+
+            "Purchase Bill Detail":
+                purchase_df,
+
+            "PR Reference":
+                pr_reference_summary,
+
+            "Reconciliation":
+                reconciliation,
+
+            "Data Quality":
+                data_quality,
+
+            "Issue Review":
+                issue_review,
+
+            "Purchase Review":
+                purchase_review,
+
+            "Inventory Review":
+                inventory_review
+        }
+
+        excel_output = create_excel(
+            output_sheets
+        )
+
+        filename = (
+            "StrategicERP_Subproject_Consumption_"
             f"{datetime.now():%Y%m%d_%H%M}.xlsx"
         )
 
         st.download_button(
             label="Download Final Excel",
             data=excel_output,
-            file_name=output_filename,
+            file_name=filename,
             mime=(
-                "application/vnd.openxmlformats-"
-                "officedocument.spreadsheetml.sheet"
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
             )
         )
 
     except Exception as error:
+
         st.error(
             "Something went wrong while processing the files."
         )
 
         st.exception(error)
 
+
 else:
+
     st.info(
-        "Upload all three Excel files to generate the report."
+        "Upload the Purchase Bill, Stock Ledger, "
+        "and PR Excel files."
     )
