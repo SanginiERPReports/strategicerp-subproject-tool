@@ -713,11 +713,6 @@ try:
 # LOAD PERMANENT GST MASTER
 # --------------------------------------------------------
 
-gst_master = load_gst_master()
-
-st.success(
-    f"GST Master loaded successfully ({len(gst_master):,} items)."
-)
     st.success(
         "All three Excel reports were read successfully."
     )
