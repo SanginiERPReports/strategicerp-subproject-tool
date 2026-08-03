@@ -327,7 +327,22 @@ def read_excel_report(
         uploaded_file,
         header=int(header_row) - 1
     )
+from pathlib import Path
 
+def load_gst_master():
+    gst_path = Path("final ITEM MASTER GST.xlsx")
+
+    if not gst_path.exists():
+        st.error(
+            "GST Master file 'final ITEM MASTER GST.xlsx' was not found."
+        )
+        st.stop()
+
+    gst_df = pd.read_excel(gst_path)
+
+    gst_df.columns = gst_df.columns.astype(str).str.strip()
+
+    return gst_df
     return prepare_dataframe(dataframe)
 
 
