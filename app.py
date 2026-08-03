@@ -320,32 +320,46 @@ def read_excel_report(
     """
     Read and clean an uploaded Excel report.
 
-    Streamlit header rows are entered starting from 1.
+    Streamlit header rows start from 1.
     Pandas header rows start from 0.
     """
     dataframe = pd.read_excel(
         uploaded_file,
         header=int(header_row) - 1
     )
-from pathlib import Path
+
+    dataframe = prepare_dataframe(
+        dataframe
+    )
+
+    return dataframe
+    from pathlib import Path
+
 
 def load_gst_master():
-    gst_path = Path("final ITEM MASTER GST.xlsx")
+    """
+    Load the permanent GST master stored in the GitHub repository.
+    """
+    gst_path = Path(
+        "final ITEM MASTER GST.xlsx"
+    )
 
     if not gst_path.exists():
-        st.error(
-            "GST Master file 'final ITEM MASTER GST.xlsx' was not found."
+        raise FileNotFoundError(
+            "GST Master file was not found in the project folder: "
+            "'final ITEM MASTER GST.xlsx'"
         )
-        st.stop()
 
-    gst_df = pd.read_excel(gst_path)
+    gst_dataframe = pd.read_excel(
+        gst_path,
+        header=0
+    )
 
-    gst_df.columns = gst_df.columns.astype(str).str.strip()
+    gst_dataframe = prepare_dataframe(
+        gst_dataframe
+    )
 
-    return gst_df
-    return prepare_dataframe(dataframe)
-
-
+    return gst_dataframe
 # ============================================================
 # DISPLAY FUNCTIONS
 # ============================================================
