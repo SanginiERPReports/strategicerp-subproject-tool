@@ -2911,4 +2911,1756 @@ except Exception as error:
     st.exception(error)
 
     st.stop()
-    
+    # ============================================================
+# MODULE 4 — PR REFERENCE AND VARIANCE ENGINE
+# ============================================================
+
+
+def process_pr_report(
+    pr_raw_df,
+    consumption_register
+):
+    """
+    Process the StrategicERP Purchase Requisition report.
+
+    Business logic:
+    - PR is used only as the intended-use reference.
+    - Actual consumption remains based on Stock Ledger Issued Amount.
+    - Actual consuming subproject remains the Stock Ledger issue subproject.
+    - A difference between PR subproject and issue subproject is informational.
+    - PR differences do not change actual consumption cost.
+
+    Returns:
+    1. Detailed PR register
+    2. PR reference summary
+    3. Consumption register with PR validation
+    4. PR versus actual issue variance report
+    5. Issues with no PR reference
+    6. PR data review
+    7. Detected PR column dictionary
+    """
+
+    pr_df = pr_raw_df.copy()
+
+    # --------------------------------------------------------
+    # FIND REQUIRED PR COLUMNS
+    # --------------------------------------------------------
+
+    pr_number_col = find_column(
+        pr_df,
+        [
+            "Purchase Requisition (PR) No.",
+            "PRNo",
+            "PR No",
+            "P.RNo",
+            "P.R. No",
+            "Purchase Requisition No"
+        ]
+    )
+
+    item_col = find_column(
+        pr_df,
+        [
+            "Item Desc",
+            "Item Description",
+            "Item Name"
+        ]
+    )
+
+    quantity_col = find_column(
+        pr_df,
+        [
+            "Quantity",
+            "PR Qty",
+            "Requested Qty",
+            "Requisition Qty"
+        ]
+    )
+
+    subproject_col = find_column(
+        pr_df,
+        [
+            "Sub Project",
+            "SubProject",
+            "Sub-Project"
+        ]
+    )
+
+    # --------------------------------------------------------
+    # FIND OPTIONAL PR COLUMNS
+    # --------------------------------------------------------
+
+    company_col = find_column(
+        pr_df,
+        [
+            "Name of Company",
+            "Name Of Company",
+            "Company Name",
+            "Company"
+        ],
+        required=False
+    )
+
+    project_col = find_column(
+        pr_df,
+        [
+            "Project Name",
+            "Project"
+        ],
+        required=False
+    )
+
+    unit_col = find_column(
+        pr_df,
+        [
+            "Unit",
+            "UOM",
+            "U.O.M."
+        ],
+        required=False
+    )
+
+    pr_date_col = find_column(
+        pr_df,
+        [
+            "PR Date",
+            "Purchase Requisition Date",
+            "Requisition Date",
+            "Date"
+        ],
+        required=False
+    )
+
+    required_by_date_col = find_column(
+        pr_df,
+        [
+            "Required By Date",
+            "Required Date",
+            "Need By Date"
+        ],
+        required=False
+    )
+
+    department_col = find_column(
+        pr_df,
+        [
+            "Department Name",
+            "Department",
+            "Dept Name"
+        ],
+        required=False
+    )
+
+    activity_col = find_column(
+        pr_df,
+        [
+            "Activity Code",
+            "Activity",
+            "Work Activity"
+        ],
+        required=False
+    )
+
+    requestor_col = find_column(
+        pr_df,
+        [
+            "Requested By",
+            "Created By",
+            "Prepared By",
+            "Requestor",
+            "Requisition By"
+        ],
+        required=False
+    )
+
+    status_col = find_column(
+        pr_df,
+        [
+            "Status",
+            "PR Status",
+            "Requisition Status"
+        ],
+        required=False
+    )
+
+    remarks_col = find_column(
+        pr_df,
+        [
+            "Remarks",
+            "Remark",
+            "Description",
+            "Narration"
+        ],
+        required=False
+    )
+
+    # --------------------------------------------------------
+    # ADD SOURCE ROW NUMBER
+    # --------------------------------------------------------
+
+    pr_df["Source PR Row No"] = range(
+        1,
+        len(pr_df) + 1
+    )
+
+    # --------------------------------------------------------
+    # CLEAN IMPORTANT FIELDS
+    # --------------------------------------------------------
+
+    pr_df["PR_Clean"] = (
+        pr_df[pr_number_col]
+        .apply(clean_text)
+    )
+
+    pr_df["Item_Clean"] = (
+        pr_df[item_col]
+        .apply(clean_item)
+    )
+
+    pr_df["PR Quantity Numeric"] = to_number(
+        pr_df[quantity_col]
+    )
+
+    pr_df["PR Subproject Original"] = (
+        pr_df[subproject_col]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    if project_col:
+        pr_df["PR Project Clean"] = (
+            pr_df[project_col]
+            .apply(clean_text)
+        )
+    else:
+        pr_df["PR Project Clean"] = ""
+
+    if activity_col:
+        pr_df["PR Activity Clean"] = (
+            pr_df[activity_col]
+            .apply(clean_text)
+        )
+    else:
+        pr_df["PR Activity Clean"] = ""
+
+    # --------------------------------------------------------
+    # DATE CLEANING
+    # --------------------------------------------------------
+
+    if pr_date_col:
+        pr_df["PR Date Parsed"] = pd.to_datetime(
+            pr_df[pr_date_col],
+            errors="coerce",
+            dayfirst=True
+        )
+    else:
+        pr_df["PR Date Parsed"] = pd.NaT
+
+    if required_by_date_col:
+        pr_df["Required By Date Parsed"] = pd.to_datetime(
+            pr_df[required_by_date_col],
+            errors="coerce",
+            dayfirst=True
+        )
+    else:
+        pr_df["Required By Date Parsed"] = pd.NaT
+
+    # --------------------------------------------------------
+    # PR DATA QUALITY CHECKS
+    # --------------------------------------------------------
+
+    pr_df["PR Data Status"] = "OK"
+
+    pr_df.loc[
+        pr_df["PR_Clean"] == "",
+        "PR Data Status"
+    ] = "REVIEW: PR number is blank"
+
+    pr_df.loc[
+        pr_df["Item_Clean"] == "",
+        "PR Data Status"
+    ] = "REVIEW: Item description is blank"
+
+    pr_df.loc[
+        pr_df["PR Quantity Numeric"] <= 0,
+        "PR Data Status"
+    ] = "REVIEW: PR quantity is zero or blank"
+
+    pr_df.loc[
+        pr_df["PR Subproject Original"] == "",
+        "PR Data Status"
+    ] = "REVIEW: PR subproject is blank"
+
+    # --------------------------------------------------------
+    # EXPAND MULTIPLE PR SUBPROJECTS
+    # --------------------------------------------------------
+
+    expanded_rows = []
+
+    for _, row in pr_df.iterrows():
+
+        pr_number = row["PR_Clean"]
+        item_clean = row["Item_Clean"]
+        quantity = row["PR Quantity Numeric"]
+
+        subprojects = split_subprojects(
+            row[subproject_col]
+        )
+
+        if not subprojects:
+            subprojects = [""]
+
+        # The quantity is kept as the original PR quantity.
+        # It is not divided and is not used for consumption costing.
+        for intended_subproject in subprojects:
+
+            expanded_row = {
+                "PR_Clean": pr_number,
+                "Item_Clean": item_clean,
+                "Intended PR Subproject": intended_subproject,
+                "PR Reference Quantity": quantity,
+                "Source PR Row No": row["Source PR Row No"],
+                "PR Data Status": row["PR Data Status"]
+            }
+
+            if company_col:
+                expanded_row["PR Company"] = row[company_col]
+
+            if project_col:
+                expanded_row["PR Project"] = row[project_col]
+
+            if unit_col:
+                expanded_row["PR Unit"] = row[unit_col]
+
+            if department_col:
+                expanded_row["PR Department"] = row[department_col]
+
+            if activity_col:
+                expanded_row["PR Activity Code"] = row[activity_col]
+
+            if requestor_col:
+                expanded_row["PR Requested By"] = row[requestor_col]
+
+            if status_col:
+                expanded_row["PR ERP Status"] = row[status_col]
+
+            if remarks_col:
+                expanded_row["PR Remarks"] = row[remarks_col]
+
+            if pr_date_col:
+                expanded_row["PR Date"] = row[pr_date_col]
+
+            if required_by_date_col:
+                expanded_row["Required By Date"] = row[
+                    required_by_date_col
+                ]
+
+            expanded_rows.append(
+                expanded_row
+            )
+
+    pr_reference_detail = pd.DataFrame(
+        expanded_rows
+    )
+
+    # --------------------------------------------------------
+    # CREATE PR REFERENCE SUMMARY
+    # --------------------------------------------------------
+
+    if pr_reference_detail.empty:
+
+        pr_reference_summary = pd.DataFrame(
+            columns=[
+                "PR_Clean",
+                "Item_Clean",
+                "Intended PR Subprojects",
+                "PR Reference Quantity",
+                "Source PR Row Nos",
+                "PR Reference Status"
+            ]
+        )
+
+    else:
+
+        aggregation_rules = {
+            "Intended PR Subproject": join_unique,
+            "PR Reference Quantity": "max",
+            "Source PR Row No": lambda values: join_unique(
+                values.astype(str)
+            ),
+            "PR Data Status": join_unique
+        }
+
+        optional_reference_columns = [
+            "PR Company",
+            "PR Project",
+            "PR Unit",
+            "PR Department",
+            "PR Activity Code",
+            "PR Requested By",
+            "PR ERP Status"
+        ]
+
+        for optional_column in optional_reference_columns:
+            if optional_column in pr_reference_detail.columns:
+                aggregation_rules[optional_column] = join_unique
+
+        pr_reference_summary = (
+            pr_reference_detail
+            .groupby(
+                [
+                    "PR_Clean",
+                    "Item_Clean"
+                ],
+                as_index=False,
+                dropna=False
+            )
+            .agg(aggregation_rules)
+            .rename(columns={
+                "Intended PR Subproject":
+                    "Intended PR Subprojects",
+
+                "Source PR Row No":
+                    "Source PR Row Nos",
+
+                "PR Data Status":
+                    "PR Reference Status"
+            })
+        )
+
+    # --------------------------------------------------------
+    # ADD PR REFERENCE TO ACTUAL CONSUMPTION REGISTER
+    # --------------------------------------------------------
+
+    consumption_with_pr = (
+        consumption_register
+        .copy()
+    )
+
+    consumption_with_pr = consumption_with_pr.merge(
+        pr_reference_summary,
+        on=[
+            "PR_Clean",
+            "Item_Clean"
+        ],
+        how="left",
+        indicator=True
+    )
+
+    consumption_with_pr[
+        "Intended PR Subprojects"
+    ] = (
+        consumption_with_pr[
+            "Intended PR Subprojects"
+        ]
+        .fillna("")
+    )
+
+    consumption_with_pr[
+        "PR Reference Quantity"
+    ] = to_number(
+        consumption_with_pr[
+            "PR Reference Quantity"
+        ]
+    )
+
+    consumption_with_pr[
+        "PR Reference Match Status"
+    ] = "PR + Item reference found"
+
+    consumption_with_pr.loc[
+        consumption_with_pr["_merge"] != "both",
+        "PR Reference Match Status"
+    ] = "INFORMATIONAL: PR + Item reference not found"
+
+    consumption_with_pr = (
+        consumption_with_pr
+        .drop(columns=["_merge"])
+    )
+
+    # --------------------------------------------------------
+    # COMPARE ACTUAL ISSUE SUBPROJECT WITH PR REFERENCE
+    # --------------------------------------------------------
+
+    def compare_actual_with_pr(row):
+        """
+        Compare the actual issue subproject with the PR reference.
+
+        This is informational only.
+        It does not alter or reallocate consumption cost.
+        """
+
+        actual_subproject = clean_subproject(
+            row.get(
+                "Actual Issue Subproject",
+                ""
+            )
+        )
+
+        intended_text = str(
+            row.get(
+                "Intended PR Subprojects",
+                ""
+            )
+        ).strip()
+
+        if not intended_text:
+            return (
+                "INFORMATIONAL: "
+                "PR reference unavailable"
+            )
+
+        intended_subprojects = [
+            clean_subproject(value)
+            for value in intended_text.split(" | ")
+            if clean_subproject(value)
+        ]
+
+        if actual_subproject in intended_subprojects:
+            return (
+                "MATCHED: Actual issue agrees "
+                "with PR reference"
+            )
+
+        return (
+            "INFORMATIONAL: Actual issue "
+            "subproject differs from PR reference"
+        )
+
+    if consumption_with_pr.empty:
+
+        consumption_with_pr[
+            "PR vs Actual Issue Result"
+        ] = pd.Series(dtype=str)
+
+    else:
+
+        consumption_with_pr[
+            "PR vs Actual Issue Result"
+        ] = consumption_with_pr.apply(
+            compare_actual_with_pr,
+            axis=1
+        )
+
+    # --------------------------------------------------------
+    # PR VARIANCE REPORT
+    # --------------------------------------------------------
+
+    pr_variance = consumption_with_pr[
+        consumption_with_pr[
+            "PR vs Actual Issue Result"
+        ].str.contains(
+            "differs",
+            case=False,
+            na=False
+        )
+    ].copy()
+
+    # PR variance is intentionally not classified as an error.
+    pr_variance[
+        "Variance Classification"
+    ] = (
+        "INFORMATIONAL: Actual consuming subproject "
+        "differs from intended PR subproject"
+    )
+
+    # --------------------------------------------------------
+    # ISSUES WITH NO PR REFERENCE
+    # --------------------------------------------------------
+
+    no_pr_reference = consumption_with_pr[
+        consumption_with_pr[
+            "PR Reference Match Status"
+        ].str.contains(
+            "not found",
+            case=False,
+            na=False
+        )
+    ].copy()
+
+    # --------------------------------------------------------
+    # ACTUAL CONSUMPTION SUMMARY BY PR VALIDATION RESULT
+    # --------------------------------------------------------
+
+    pr_validation_summary = (
+        consumption_with_pr
+        .groupby(
+            "PR vs Actual Issue Result",
+            as_index=False,
+            dropna=False
+        )
+        .agg({
+            "Actual Consumption Qty": "sum",
+            "Actual Consumption Cost": "sum",
+            "Source Stock Row No": "count"
+        })
+        .rename(columns={
+            "Source Stock Row No":
+                "Consumption Row Count"
+        })
+        .sort_values(
+            "Actual Consumption Cost",
+            ascending=False
+        )
+    )
+
+    # --------------------------------------------------------
+    # PR VARIANCE SUMMARY BY ACTUAL SUBPROJECT
+    # --------------------------------------------------------
+
+    if pr_variance.empty:
+
+        pr_variance_summary = pd.DataFrame(
+            columns=[
+                "Actual Issue Subproject",
+                "Actual Consumption Qty",
+                "Actual Consumption Cost",
+                "Variance Row Count"
+            ]
+        )
+
+    else:
+
+        pr_variance_summary = (
+            pr_variance
+            .groupby(
+                "Actual Issue Subproject",
+                as_index=False,
+                dropna=False
+            )
+            .agg({
+                "Actual Consumption Qty": "sum",
+                "Actual Consumption Cost": "sum",
+                "Source Stock Row No": "count"
+            })
+            .rename(columns={
+                "Source Stock Row No":
+                    "Variance Row Count"
+            })
+            .sort_values(
+                "Actual Consumption Cost",
+                ascending=False
+            )
+        )
+
+    # --------------------------------------------------------
+    # PR DATA REVIEW REPORT
+    # --------------------------------------------------------
+
+    pr_review = pr_df[
+        pr_df["PR Data Status"] != "OK"
+    ].copy()
+
+    # --------------------------------------------------------
+    # DETECTED PR COLUMN INFORMATION
+    # --------------------------------------------------------
+
+    detected_columns = {
+        "company": company_col,
+        "project": project_col,
+        "pr_number": pr_number_col,
+        "pr_date": pr_date_col,
+        "required_by_date": required_by_date_col,
+        "item": item_col,
+        "unit": unit_col,
+        "quantity": quantity_col,
+        "subproject": subproject_col,
+        "department": department_col,
+        "activity": activity_col,
+        "requestor": requestor_col,
+        "status": status_col,
+        "remarks": remarks_col
+    }
+
+    return (
+        pr_df,
+        pr_reference_detail,
+        pr_reference_summary,
+        consumption_with_pr,
+        pr_validation_summary,
+        pr_variance,
+        pr_variance_summary,
+        no_pr_reference,
+        pr_review,
+        detected_columns
+    )
+
+
+# ============================================================
+# RUN MODULE 4
+# ============================================================
+
+try:
+
+    (
+        pr_register,
+        pr_reference_detail,
+        pr_reference_summary,
+        consumption_register_with_pr,
+        pr_validation_summary,
+        pr_variance,
+        pr_variance_summary,
+        no_pr_reference,
+        pr_review,
+        pr_columns
+    ) = process_pr_report(
+        pr_raw_df,
+        consumption_register
+    )
+
+    st.divider()
+
+    st.header(
+        "Module 4 — PR Reference and Variance"
+    )
+
+    # --------------------------------------------------------
+    # MODULE 4 METRICS
+    # --------------------------------------------------------
+
+    matched_pr_rows = int(
+        consumption_register_with_pr[
+            "PR vs Actual Issue Result"
+        ]
+        .str.contains(
+            "MATCHED",
+            case=False,
+            na=False
+        )
+        .sum()
+    )
+
+    variance_rows = len(
+        pr_variance
+    )
+
+    no_reference_rows = len(
+        no_pr_reference
+    )
+
+    unique_pr_numbers = (
+        pr_register[
+            "PR_Clean"
+        ]
+        .replace("", pd.NA)
+        .dropna()
+        .nunique()
+    )
+
+    pr_c1, pr_c2, pr_c3, pr_c4 = st.columns(4)
+
+    show_metric(
+        pr_c1,
+        "Unique PR Numbers",
+        unique_pr_numbers,
+        "integer"
+    )
+
+    show_metric(
+        pr_c2,
+        "Matched PR Reference Rows",
+        matched_pr_rows,
+        "integer"
+    )
+
+    show_metric(
+        pr_c3,
+        "PR Variance Rows",
+        variance_rows,
+        "integer"
+    )
+
+    show_metric(
+        pr_c4,
+        "No PR Reference Rows",
+        no_reference_rows,
+        "integer"
+    )
+
+    # --------------------------------------------------------
+    # DISPLAY PR SUMMARIES
+    # --------------------------------------------------------
+
+    show_dataframe(
+        "PR Validation Summary",
+        pr_validation_summary,
+        maximum_rows=100
+    )
+
+    show_dataframe(
+        "PR Variance Summary by Actual Subproject",
+        pr_variance_summary,
+        maximum_rows=200
+    )
+
+    # --------------------------------------------------------
+    # DISPLAY REFERENCE TABLES
+    # --------------------------------------------------------
+
+    with st.expander(
+        "Preview PR Reference Summary",
+        expanded=False
+    ):
+
+        show_dataframe(
+            "PR Reference Summary",
+            pr_reference_summary,
+            maximum_rows=200
+        )
+
+    with st.expander(
+        "Preview Consumption Register with PR Reference",
+        expanded=False
+    ):
+
+        show_dataframe(
+            "Consumption Register with PR Reference",
+            consumption_register_with_pr,
+            maximum_rows=200
+        )
+
+    # --------------------------------------------------------
+    # DISPLAY INFORMATIONAL VARIANCES
+    # --------------------------------------------------------
+
+    if not pr_variance.empty:
+
+        with st.expander(
+            "PR versus Actual Issue Variance — Informational",
+            expanded=False
+        ):
+
+            st.info(
+                "These rows are not costing errors. "
+                "The Stock Ledger issue subproject remains "
+                "the actual consuming subproject."
+            )
+
+            show_dataframe(
+                "PR Variance Detail",
+                pr_variance,
+                maximum_rows=300
+            )
+
+    if not no_pr_reference.empty:
+
+        with st.expander(
+            "Issues Without PR + Item Reference",
+            expanded=False
+        ):
+
+            st.info(
+                "Consumption remains valid because it is based "
+                "on the Stock Ledger issued amount. "
+                "This report only identifies missing PR traceability."
+            )
+
+            show_dataframe(
+                "No PR Reference",
+                no_pr_reference,
+                maximum_rows=300
+            )
+
+    # --------------------------------------------------------
+    # DISPLAY GENUINE PR DATA ISSUES
+    # --------------------------------------------------------
+
+    if not pr_review.empty:
+
+        with st.expander(
+            "PR Source Data Review Required",
+            expanded=False
+        ):
+
+            show_dataframe(
+                "PR Review",
+                pr_review,
+                maximum_rows=200
+            )
+
+    st.success(
+        "Module 4 completed successfully. "
+        "PR references and informational variances are ready."
+    )
+
+except Exception as error:
+
+    st.error(
+        "Module 4 could not process the PR report."
+    )
+
+    st.exception(error)
+
+    st.stop()
+    # ============================================================
+# MODULE 5 — FINAL DASHBOARD, AUDIT AND EXCEL EXPORT
+# ============================================================
+
+
+def build_final_audit_report(
+    purchase_review,
+    stock_issue_review,
+    inventory_review,
+    pr_review
+):
+    """
+    Combine only genuine data-quality issues.
+
+    PR variance is intentionally excluded because it is informational.
+    """
+
+    audit_frames = []
+
+    if purchase_review is not None and not purchase_review.empty:
+        purchase_audit = purchase_review.copy()
+        purchase_audit.insert(
+            0,
+            "Audit Source",
+            "Purchase Bill"
+        )
+        audit_frames.append(
+            purchase_audit
+        )
+
+    if stock_issue_review is not None and not stock_issue_review.empty:
+        stock_audit = stock_issue_review.copy()
+        stock_audit.insert(
+            0,
+            "Audit Source",
+            "Stock Ledger Issue"
+        )
+        audit_frames.append(
+            stock_audit
+        )
+
+    if inventory_review is not None and not inventory_review.empty:
+        inventory_audit = inventory_review.copy()
+        inventory_audit.insert(
+            0,
+            "Audit Source",
+            "Inventory"
+        )
+        audit_frames.append(
+            inventory_audit
+        )
+
+    if pr_review is not None and not pr_review.empty:
+        pr_audit = pr_review.copy()
+        pr_audit.insert(
+            0,
+            "Audit Source",
+            "PR Source Data"
+        )
+        audit_frames.append(
+            pr_audit
+        )
+
+    if not audit_frames:
+        return pd.DataFrame(
+            columns=[
+                "Audit Source",
+                "Audit Status"
+            ]
+        )
+
+    all_columns = []
+
+    for dataframe in audit_frames:
+        for column in dataframe.columns:
+            if column not in all_columns:
+                all_columns.append(column)
+
+    aligned_frames = []
+
+    for dataframe in audit_frames:
+        aligned_dataframe = dataframe.reindex(
+            columns=all_columns
+        )
+        aligned_frames.append(
+            aligned_dataframe
+        )
+
+    final_audit = pd.concat(
+        aligned_frames,
+        ignore_index=True
+    )
+
+    return final_audit
+
+
+def build_dashboard_summary(
+    purchase_register,
+    consumption_register_with_pr,
+    inventory_summary,
+    procurement_summary,
+    subproject_consumption_summary,
+    activity_consumption_summary,
+    contractor_consumption_summary,
+    item_consumption_summary,
+    purchase_review,
+    stock_issue_review,
+    inventory_review,
+    pr_review,
+    pr_variance
+):
+    """
+    Create a one-row dashboard summary for Excel export.
+    """
+
+    procurement_principal = purchase_register[
+        "PB Principal Amount"
+    ].sum()
+
+    procurement_gst = purchase_register[
+        "PB GST Amount"
+    ].sum()
+
+    procurement_total = purchase_register[
+        "PB Total Bill Amount"
+    ].sum()
+
+    actual_consumption = consumption_register_with_pr[
+        "Actual Consumption Cost"
+    ].sum()
+
+    closing_stock_value = inventory_summary[
+        "Closing Stock Value"
+    ].sum()
+
+    closing_stock_qty = inventory_summary[
+        "Closing Stock Qty"
+    ].sum()
+
+    received_stock_value = inventory_summary[
+        "Stock Received Amount"
+    ].sum()
+
+    issued_stock_value = inventory_summary[
+        "Stock Issued Amount"
+    ].sum()
+
+    return pd.DataFrame([
+        {
+            "Report Generated On":
+                datetime.now().strftime(
+                    "%d-%m-%Y %H:%M"
+                ),
+
+            "Procurement Principal Cost":
+                procurement_principal,
+
+            "Procurement GST":
+                procurement_gst,
+
+            "Total Purchase Bill Value":
+                procurement_total,
+
+            "Stock Ledger Received Value":
+                received_stock_value,
+
+            "Actual Consumption Cost":
+                actual_consumption,
+
+            "Stock Ledger Issued Value":
+                issued_stock_value,
+
+            "Closing Stock Value":
+                closing_stock_value,
+
+            "Closing Stock Quantity":
+                closing_stock_qty,
+
+            "Purchase Bill Rows":
+                len(purchase_register),
+
+            "Consumption Rows":
+                len(consumption_register_with_pr),
+
+            "Inventory Summary Rows":
+                len(inventory_summary),
+
+            "Procurement Summary Rows":
+                len(procurement_summary),
+
+            "Subproject Summary Rows":
+                len(subproject_consumption_summary),
+
+            "Activity Summary Rows":
+                len(activity_consumption_summary),
+
+            "Contractor Summary Rows":
+                len(contractor_consumption_summary),
+
+            "Item Summary Rows":
+                len(item_consumption_summary),
+
+            "Purchase Review Rows":
+                len(purchase_review),
+
+            "Stock Issue Review Rows":
+                len(stock_issue_review),
+
+            "Inventory Review Rows":
+                len(inventory_review),
+
+            "PR Source Review Rows":
+                len(pr_review),
+
+            "PR Variance Rows":
+                len(pr_variance)
+        }
+    ])
+
+
+def build_data_quality_summary(
+    purchase_register,
+    consumption_register_with_pr,
+    inventory_summary,
+    pr_register,
+    purchase_review,
+    stock_issue_review,
+    inventory_review,
+    pr_review,
+    pr_variance,
+    no_pr_reference
+):
+    """
+    Create a clean data-quality summary.
+
+    PR variance and missing PR reference are informational.
+    """
+
+    return pd.DataFrame([
+        {
+            "Check":
+                "Purchase Bill source data",
+
+            "Total Rows":
+                len(purchase_register),
+
+            "Review Rows":
+                len(purchase_review),
+
+            "Classification":
+                "ERROR CHECK",
+
+            "Status":
+                (
+                    "OK"
+                    if len(purchase_review) == 0
+                    else "REVIEW REQUIRED"
+                )
+        },
+        {
+            "Check":
+                "Stock issue source data",
+
+            "Total Rows":
+                len(consumption_register_with_pr),
+
+            "Review Rows":
+                len(stock_issue_review),
+
+            "Classification":
+                "ERROR CHECK",
+
+            "Status":
+                (
+                    "OK"
+                    if len(stock_issue_review) == 0
+                    else "REVIEW REQUIRED"
+                )
+        },
+        {
+            "Check":
+                "Inventory balances",
+
+            "Total Rows":
+                len(inventory_summary),
+
+            "Review Rows":
+                len(inventory_review),
+
+            "Classification":
+                "ERROR CHECK",
+
+            "Status":
+                (
+                    "OK"
+                    if len(inventory_review) == 0
+                    else "REVIEW REQUIRED"
+                )
+        },
+        {
+            "Check":
+                "PR source data",
+
+            "Total Rows":
+                len(pr_register),
+
+            "Review Rows":
+                len(pr_review),
+
+            "Classification":
+                "ERROR CHECK",
+
+            "Status":
+                (
+                    "OK"
+                    if len(pr_review) == 0
+                    else "REVIEW REQUIRED"
+                )
+        },
+        {
+            "Check":
+                "PR vs actual issue variance",
+
+            "Total Rows":
+                len(consumption_register_with_pr),
+
+            "Review Rows":
+                len(pr_variance),
+
+            "Classification":
+                "INFORMATIONAL",
+
+            "Status":
+                "INFORMATIONAL"
+        },
+        {
+            "Check":
+                "Consumption rows without PR reference",
+
+            "Total Rows":
+                len(consumption_register_with_pr),
+
+            "Review Rows":
+                len(no_pr_reference),
+
+            "Classification":
+                "INFORMATIONAL",
+
+            "Status":
+                "INFORMATIONAL"
+        }
+    ])
+
+
+def build_procurement_consumption_comparison(
+    purchase_register,
+    consumption_register_with_pr
+):
+    """
+    Compare procurement and consumption at project level.
+
+    This is informational because Purchase Bill and Stock Ledger
+    may not cover the same date range or valuation basis.
+    """
+
+    purchase_project_col = purchase_columns[
+        "project"
+    ]
+
+    stock_project_col = stock_columns[
+        "project"
+    ]
+
+    procurement_by_project = (
+        purchase_register
+        .groupby(
+            purchase_project_col,
+            as_index=False,
+            dropna=False
+        )
+        .agg({
+            "PB Principal Amount": "sum",
+            "PB GST Amount": "sum",
+            "PB Total Bill Amount": "sum"
+        })
+        .rename(columns={
+            purchase_project_col:
+                "Project",
+
+            "PB Principal Amount":
+                "Procurement Principal Cost",
+
+            "PB GST Amount":
+                "Procurement GST",
+
+            "PB Total Bill Amount":
+                "Procurement Total Including GST"
+        })
+    )
+
+    consumption_by_project = (
+        consumption_register_with_pr
+        .groupby(
+            stock_project_col,
+            as_index=False,
+            dropna=False
+        )
+        .agg({
+            "Actual Consumption Cost": "sum"
+        })
+        .rename(columns={
+            stock_project_col:
+                "Project",
+
+            "Actual Consumption Cost":
+                "Actual Consumption Cost"
+        })
+    )
+
+    comparison = procurement_by_project.merge(
+        consumption_by_project,
+        on="Project",
+        how="outer"
+    )
+
+    numeric_columns = [
+        "Procurement Principal Cost",
+        "Procurement GST",
+        "Procurement Total Including GST",
+        "Actual Consumption Cost"
+    ]
+
+    for column in numeric_columns:
+        comparison[column] = to_number(
+            comparison[column]
+        )
+
+    comparison[
+        "Procurement Principal Less Consumption"
+    ] = (
+        comparison[
+            "Procurement Principal Cost"
+        ]
+        - comparison[
+            "Actual Consumption Cost"
+        ]
+    )
+
+    comparison[
+        "Comparison Status"
+    ] = (
+        "INFORMATIONAL: Compare only when "
+        "both reports cover the same period and scope"
+    )
+
+    return comparison.sort_values(
+        "Actual Consumption Cost",
+        ascending=False
+    )
+
+
+try:
+
+    st.divider()
+
+    st.header(
+        "Module 5 — Final Dashboard and Export"
+    )
+
+    # --------------------------------------------------------
+    # BUILD FINAL REPORTS
+    # --------------------------------------------------------
+
+    final_audit_report = build_final_audit_report(
+        purchase_review,
+        stock_issue_review,
+        inventory_review,
+        pr_review
+    )
+
+    dashboard_summary = build_dashboard_summary(
+        purchase_register,
+        consumption_register_with_pr,
+        inventory_summary,
+        procurement_summary,
+        subproject_consumption_summary,
+        activity_consumption_summary,
+        contractor_consumption_summary,
+        item_consumption_summary,
+        purchase_review,
+        stock_issue_review,
+        inventory_review,
+        pr_review,
+        pr_variance
+    )
+
+    final_data_quality = build_data_quality_summary(
+        purchase_register,
+        consumption_register_with_pr,
+        inventory_summary,
+        pr_register,
+        purchase_review,
+        stock_issue_review,
+        inventory_review,
+        pr_review,
+        pr_variance,
+        no_pr_reference
+    )
+
+    procurement_consumption_comparison = (
+        build_procurement_consumption_comparison(
+            purchase_register,
+            consumption_register_with_pr
+        )
+    )
+
+    # --------------------------------------------------------
+    # FINAL KPI VALUES
+    # --------------------------------------------------------
+
+    final_procurement_principal = (
+        purchase_register[
+            "PB Principal Amount"
+        ].sum()
+    )
+
+    final_procurement_total = (
+        purchase_register[
+            "PB Total Bill Amount"
+        ].sum()
+    )
+
+    final_consumption_cost = (
+        consumption_register_with_pr[
+            "Actual Consumption Cost"
+        ].sum()
+    )
+
+    final_closing_stock_value = (
+        inventory_summary[
+            "Closing Stock Value"
+        ].sum()
+    )
+
+    final_received_stock_value = (
+        inventory_summary[
+            "Stock Received Amount"
+        ].sum()
+    )
+
+    final_issue_count = len(
+        consumption_register_with_pr
+    )
+
+    final_subproject_count = (
+        consumption_register_with_pr[
+            "Actual Issue Subproject"
+        ]
+        .replace("", pd.NA)
+        .dropna()
+        .nunique()
+    )
+
+    genuine_audit_count = (
+        len(purchase_review)
+        + len(stock_issue_review)
+        + len(inventory_review)
+        + len(pr_review)
+    )
+
+    # --------------------------------------------------------
+    # FINAL DASHBOARD METRICS
+    # --------------------------------------------------------
+
+    dashboard_c1, dashboard_c2, dashboard_c3, dashboard_c4 = (
+        st.columns(4)
+    )
+
+    show_metric(
+        dashboard_c1,
+        "Procurement Principal Cost",
+        final_procurement_principal,
+        "money"
+    )
+
+    show_metric(
+        dashboard_c2,
+        "Actual Consumption Cost",
+        final_consumption_cost,
+        "money"
+    )
+
+    show_metric(
+        dashboard_c3,
+        "Closing Stock Value",
+        final_closing_stock_value,
+        "money"
+    )
+
+    show_metric(
+        dashboard_c4,
+        "Stock Ledger Received Value",
+        final_received_stock_value,
+        "money"
+    )
+
+    dashboard_c5, dashboard_c6, dashboard_c7, dashboard_c8 = (
+        st.columns(4)
+    )
+
+    show_metric(
+        dashboard_c5,
+        "Total Purchase Bill Value",
+        final_procurement_total,
+        "money"
+    )
+
+    show_metric(
+        dashboard_c6,
+        "Actual Issue Rows",
+        final_issue_count,
+        "integer"
+    )
+
+    show_metric(
+        dashboard_c7,
+        "Consuming Subprojects",
+        final_subproject_count,
+        "integer"
+    )
+
+    show_metric(
+        dashboard_c8,
+        "Genuine Audit Rows",
+        genuine_audit_count,
+        "integer"
+    )
+
+    # --------------------------------------------------------
+    # FINAL DASHBOARD TABLES
+    # --------------------------------------------------------
+
+    show_dataframe(
+        "Final Data Quality Summary",
+        final_data_quality,
+        maximum_rows=100
+    )
+
+    show_dataframe(
+        "Procurement versus Consumption — Informational",
+        procurement_consumption_comparison,
+        maximum_rows=100
+    )
+
+    # --------------------------------------------------------
+    # TOP COST TABLES
+    # --------------------------------------------------------
+
+    top_subprojects = (
+        subproject_consumption_summary
+        .sort_values(
+            "Actual Consumption Cost",
+            ascending=False
+        )
+        .head(20)
+    )
+
+    top_items = (
+        item_consumption_summary
+        .sort_values(
+            "Actual Consumption Cost",
+            ascending=False
+        )
+        .head(20)
+    )
+
+    top_dashboard_c1, top_dashboard_c2 = (
+        st.columns(2)
+    )
+
+    with top_dashboard_c1:
+        st.subheader(
+            "Top 20 Subprojects by Consumption"
+        )
+
+        st.dataframe(
+            top_subprojects,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    with top_dashboard_c2:
+        st.subheader(
+            "Top 20 Items by Consumption"
+        )
+
+        st.dataframe(
+            top_items,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    if not contractor_consumption_summary.empty:
+
+        top_contractors = (
+            contractor_consumption_summary
+            .sort_values(
+                "Actual Consumption Cost",
+                ascending=False
+            )
+            .head(20)
+        )
+
+        show_dataframe(
+            "Top 20 Contractors by Material Consumption",
+            top_contractors,
+            maximum_rows=20
+        )
+
+    if not activity_consumption_summary.empty:
+
+        top_activities = (
+            activity_consumption_summary
+            .sort_values(
+                "Actual Consumption Cost",
+                ascending=False
+            )
+            .head(20)
+        )
+
+        show_dataframe(
+            "Top 20 Activities by Material Consumption",
+            top_activities,
+            maximum_rows=20
+        )
+
+    # --------------------------------------------------------
+    # FINAL AUDIT DISPLAY
+    # --------------------------------------------------------
+
+    if final_audit_report.empty:
+
+        st.success(
+            "No genuine audit issues were found."
+        )
+
+    else:
+
+        with st.expander(
+            "Final Genuine Audit Report",
+            expanded=False
+        ):
+
+            show_dataframe(
+                "Audit Report",
+                final_audit_report,
+                maximum_rows=500
+            )
+
+    # --------------------------------------------------------
+    # FINAL EXCEL WORKBOOK
+    # --------------------------------------------------------
+
+    final_output_sheets = {
+        "Dashboard":
+            dashboard_summary,
+
+        "Data Quality":
+            final_data_quality,
+
+        "Procurement Register":
+            purchase_register,
+
+        "Procurement Summary":
+            procurement_summary,
+
+        "Procurement Item Summary":
+            procurement_item_summary,
+
+        "Consumption Register":
+            consumption_register_with_pr,
+
+        "Subproject Summary":
+            subproject_consumption_summary,
+
+        "Activity Summary":
+            activity_consumption_summary,
+
+        "Contractor Summary":
+            contractor_consumption_summary,
+
+        "Item Summary":
+            item_consumption_summary,
+
+        "Inventory Summary":
+            inventory_summary,
+
+        "Monthly Consumption":
+            monthly_consumption_summary,
+
+        "PR Register":
+            pr_register,
+
+        "PR Reference Summary":
+            pr_reference_summary,
+
+        "PR Validation":
+            pr_validation_summary,
+
+        "PR Variance":
+            pr_variance,
+
+        "No PR Reference":
+            no_pr_reference,
+
+        "Procurement vs Consumption":
+            procurement_consumption_comparison,
+
+        "Stock Reconciliation":
+            stock_reconciliation,
+
+        "Final Audit":
+            final_audit_report,
+
+        "Purchase Review":
+            purchase_review,
+
+        "Stock Issue Review":
+            stock_issue_review,
+
+        "Inventory Review":
+            inventory_review,
+
+        "PR Source Review":
+            pr_review
+    }
+
+    final_excel_output = create_excel_workbook(
+        final_output_sheets
+    )
+
+    final_filename = (
+        "StrategicERP_Cost_Intelligence_"
+        f"{datetime.now():%Y%m%d_%H%M}.xlsx"
+    )
+
+    st.download_button(
+        label="Download Final Cost Intelligence Excel",
+        data=final_excel_output,
+        file_name=final_filename,
+        mime=(
+            "application/vnd.openxmlformats-"
+            "officedocument.spreadsheetml.sheet"
+        )
+    )
+
+    st.success(
+        "All modules completed successfully. "
+        "The final dashboard and Excel workbook are ready."
+    )
+
+except Exception as error:
+
+    st.error(
+        "Module 5 could not create the final dashboard "
+        "or Excel workbook."
+    )
+
+    st.exception(error)
+
+    st.stop()
