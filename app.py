@@ -739,7 +739,6 @@ output_df["Total Cost Including GST"] = (
     )
     + output_df["Consumption GST Amount"]
 )
-
     return output_df
 
 
