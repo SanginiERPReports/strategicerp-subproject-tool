@@ -715,23 +715,30 @@ def add_gst_to_dataframe(
     ] = "Item Group"
 
     output_df["Applicable GST %"] = to_number(
-        output_df["Applicable GST %"]
-    )
+    output_df["Applicable GST %"]
+)
 
-    output_df["Consumption GST Amount"] = (
-        to_number(
-            output_df[cost_column]
-        )
-        * output_df["Applicable GST %"]
-        / 100
+output_df["GST Rate Decimal"] = (
+    output_df["Applicable GST %"]
+    .where(
+        output_df["Applicable GST %"] <= 1,
+        output_df["Applicable GST %"] / 100
     )
+)
 
-    output_df["Total Cost Including GST"] = (
-        to_number(
-            output_df[cost_column]
-        )
-        + output_df["Consumption GST Amount"]
+output_df["Consumption GST Amount"] = (
+    to_number(
+        output_df[cost_column]
     )
+    * output_df["GST Rate Decimal"]
+)
+
+output_df["Total Cost Including GST"] = (
+    to_number(
+        output_df[cost_column]
+    )
+    + output_df["Consumption GST Amount"]
+)
 
     return output_df
 
