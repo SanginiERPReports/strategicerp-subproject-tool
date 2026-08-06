@@ -1875,33 +1875,29 @@ if generate_report:
                     )
 
                 final_output_sheets = {
-                    "Dashboard":
-                        dashboard_summary,
 
-                    "Subproject Cost Summary":
-                        subproject_summary,
+    "Dashboard":
+        dashboard_summary,
 
-                    "Activity Summary":
-                        activity_summary,
+    "Subproject Cost Summary":
+        subproject_summary,
 
-                    "Contractor Summary":
-                        contractor_summary,
+    "Item Summary":
+        item_summary,
 
-                    "Item Summary":
-                        item_summary,
+    "Contractor Summary":
+        contractor_summary,
 
-                    "Inventory Summary":
-                        inventory_summary,
+    "Consumption Register":
+        consumption_register,
 
-                    "Consumption Register":
-                        consumption_register,
+    "Procurement Register":
+        purchase_register,
 
-                    "Procurement Register":
-                        purchase_register,
+    "Audit Report":
+        audit_report
 
-                    "Audit Report":
-                        audit_report
-                }
+}
 
                 final_excel_output = create_excel_workbook(
                     final_output_sheets
