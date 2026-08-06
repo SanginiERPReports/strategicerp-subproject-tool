@@ -1882,10 +1882,10 @@ if generate_report:
     "Subproject Cost Summary":
         subproject_summary,
 
-    "Item Summary":
+    "Item Consumption":
         item_summary,
 
-    "Contractor Summary":
+    "Contractor Consumption":
         contractor_summary,
 
     "Consumption Register":
@@ -1894,7 +1894,7 @@ if generate_report:
     "Procurement Register":
         purchase_register,
 
-    "Audit Report":
+    "Audit & Exceptions":
         audit_report
 
 }
