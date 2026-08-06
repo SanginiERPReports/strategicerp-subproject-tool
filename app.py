@@ -649,35 +649,40 @@ def add_gst_to_dataframe(
     group_gst_map,
     cost_column
 ):
+
     output_df = dataframe.copy()
 
     output_df = output_df.merge(
-        item_gst_map.rename(columns={
-            "Applicable GST %":
-                "Item Level GST %"
-        }),
+        item_gst_map.rename(
+            columns={
+                "Applicable GST %": "Item Level GST %"
+            }
+        ),
         left_on="Item_Clean",
         right_on="GST_Item_Clean",
         how="left"
     )
 
-    output_df = output_df.drop(
+    output_df.drop(
         columns=["GST_Item_Clean"],
+        inplace=True,
         errors="ignore"
     )
 
     output_df = output_df.merge(
-        group_gst_map.rename(columns={
-            "Applicable GST %":
-                "Group Level GST %"
-        }),
+        group_gst_map.rename(
+            columns={
+                "Applicable GST %": "Group Level GST %"
+            }
+        ),
         left_on="Item_Group_Clean",
         right_on="GST_Item_Group_Clean",
         how="left"
     )
 
-    output_df = output_df.drop(
+    output_df.drop(
         columns=["GST_Item_Group_Clean"],
+        inplace=True,
         errors="ignore"
     )
 
@@ -708,40 +713,52 @@ def add_gst_to_dataframe(
         (
             output_df["Item Level GST %"] <= 0
         )
-        & (
+        &
+        (
             output_df["Group Level GST %"] > 0
         ),
         "GST Mapping Source"
     ] = "Item Group"
 
     output_df["Applicable GST %"] = to_number(
-    output_df["Applicable GST %"]
-)
-
-output_df["GST Rate Decimal"] = (
-    output_df["Applicable GST %"]
-    .where(
-        output_df["Applicable GST %"] <= 1,
-        output_df["Applicable GST %"] / 100
+        output_df["Applicable GST %"]
     )
-)
 
-output_df["Consumption GST Amount"] = (
-    to_number(
-        output_df[cost_column]
+    # Supports both 18 and 0.18 formats
+    output_df["GST Rate Decimal"] = (
+        output_df["Applicable GST %"]
+        .where(
+            output_df["Applicable GST %"] <= 1,
+            output_df["Applicable GST %"] / 100
+        )
     )
-    * output_df["GST Rate Decimal"]
-)
 
-output_df["Total Cost Including GST"] = (
-    to_number(
-        output_df[cost_column]
+    output_df["Consumption GST Amount"] = (
+        to_number(
+            output_df[cost_column]
+        )
+        * output_df["GST Rate Decimal"]
     )
-    + output_df["Consumption GST Amount"]
-)
+
+    output_df["Total Cost Including GST"] = (
+        to_number(
+            output_df[cost_column]
+        )
+        + output_df["Consumption GST Amount"]
+    )
+
+    # Show GST as 18 instead of 0.18 in Excel
+    output_df["Applicable GST %"] = (
+        output_df["GST Rate Decimal"] * 100
+    )
+
+    output_df.drop(
+        columns=["GST Rate Decimal"],
+        inplace=True,
+        errors="ignore"
+    )
 
     return output_df
-
 
 # ============================================================
 # STOCK LEDGER PROCESSING
